@@ -7,7 +7,20 @@ export type Equipment =
   | 'kettlebell'
   | 'bodyweight'
   | 'other'
-export type SetMethod = 'straight' | 'amrap' | 'rir' | 'rpe' | 'to_failure'
+export type SetMethod =
+  | 'straight'
+  | 'amrap'
+  | 'rir'
+  | 'rpe'
+  | 'to_failure'
+  | 'reps_range'
+export type ExerciseCategory =
+  | 'main_lift'
+  | 'accessory'
+  | 'warmup'
+  | 'finisher'
+  | 'rehab'
+  | 'plyo'
 export type SessionStatus = 'assigned' | 'completed' | 'skipped'
 export type AdHocType = 'cardio' | 'sport' | 'mobility' | 'other'
 
@@ -19,12 +32,35 @@ export type WarmupStep = {
   notes?: string
 }
 
+export function warmupToText(warmup: unknown): string {
+  if (typeof warmup === 'string') return warmup
+  if (!Array.isArray(warmup)) return ''
+  return warmup
+    .map((step) => {
+      if (typeof step === 'string') return step
+      if (!step || typeof step !== 'object') return ''
+      const item = step as WarmupStep
+      return [
+        item.name,
+        item.sets != null ? `${item.sets} sets` : null,
+        item.reps != null ? `${item.reps} reps` : null,
+        item.notes,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
 export type Tempo = {
   eccentric?: number | null
   pauseBottom?: number | null
   concentric?: number | null
   pauseTop?: number | null
 }
+
+export type TempoMode = 'default' | 'per_rep'
 
 export type PrescribedExercise = {
   movementId: string
@@ -36,7 +72,11 @@ export type PrescribedExercise = {
   repsMax?: number | null
   method: SetMethod
   methodTarget?: number | null
+  category?: ExerciseCategory | null
+  loadPrescription?: string | null
   tempo?: Tempo
+  tempoMode?: TempoMode
+  tempoPerRep?: Tempo[]
   restAfterSetSeconds?: number | null
   restAfterExerciseSeconds?: number | null
   supersetGroup?: string | null
@@ -46,7 +86,7 @@ export type PrescribedExercise = {
 }
 
 export type Prescription = {
-  warmup: WarmupStep[]
+  warmup: string
   exercises: PrescribedExercise[]
 }
 
@@ -76,10 +116,14 @@ export type TemplateExercise = {
   repsMax: number | null
   method: SetMethod
   methodTarget: number | null
+  category: ExerciseCategory | null
+  loadPrescription: string | null
   tempoEccentric: number | null
   tempoPauseBottom: number | null
   tempoConcentric: number | null
   tempoPauseTop: number | null
+  tempoMode: TempoMode
+  tempoPerRep: Tempo[]
   restAfterSetSeconds: number | null
   restAfterExerciseSeconds: number | null
   supersetGroup: string | null
@@ -93,7 +137,7 @@ export type WorkoutTemplate = {
   trainerId: string
   name: string
   notes: string | null
-  warmup: WarmupStep[]
+  warmup: string
   createdAt: string
   updatedAt: string
   exercises?: TemplateExercise[]

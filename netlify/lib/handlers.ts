@@ -3,6 +3,7 @@ import { getDatabase } from '@netlify/database'
 import type {
   AdHocType,
   Equipment,
+  ExerciseCategory,
   MeResponse,
   Movement,
   PrescribedExercise,
@@ -11,9 +12,11 @@ import type {
   SetLog,
   SetMethod,
   TemplateExercise,
-  WarmupStep,
+  Tempo,
+  TempoMode,
   WorkoutTemplate,
 } from '../../shared/types.ts'
+import { warmupToText } from '../../shared/types.ts'
 import { devAuthEnabled, devPersonaFromRequest } from './devAuth.ts'
 import { MOVEMENT_SEEDS } from './movements.ts'
 import {
@@ -327,6 +330,61 @@ export async function handleMovements(req: Request) {
   return json(movements)
 }
 
+async function movementWithVariants(db: Db, id: string): Promise<Movement | null> {
+  const rows = await db.sql<{
+    id: string
+    name: string
+    aliases: string[]
+    muscle_groups: string[]
+    youtube_url: string | null
+  }>`
+    SELECT id, name, aliases, muscle_groups, youtube_url
+    FROM movements
+    WHERE id = ${id}
+  `
+  const row = rows[0]
+  if (!row) return null
+  const variants = await db.sql<{ id: string; equipment: Equipment }>`
+    SELECT id, equipment FROM movement_variants WHERE movement_id = ${id}
+  `
+  return {
+    id: row.id,
+    name: row.name,
+    aliases: row.aliases ?? [],
+    muscleGroups: row.muscle_groups ?? [],
+    youtubeUrl: row.youtube_url,
+    variants: variants.map((v) => ({ id: v.id, equipment: v.equipment })),
+  }
+}
+
+export async function handleCreateMovement(ctx: AppContext, req: Request) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const body = (await req.json()) as { name?: string }
+  const name = body.name?.trim()
+  if (!name) return error('Movement name is required')
+
+  const existing = await ctx.db.sql<{ id: string }>`
+    SELECT id FROM movements WHERE lower(name) = lower(${name}) LIMIT 1
+  `
+  if (existing[0]) {
+    const movement = await movementWithVariants(ctx.db, existing[0].id)
+    return json(movement)
+  }
+
+  const [inserted] = await ctx.db.sql<{ id: string }>`
+    INSERT INTO movements (name, aliases, muscle_groups)
+    VALUES (${name}, ${[]}, ${[]})
+    RETURNING id
+  `
+  await ctx.db.sql`
+    INSERT INTO movement_variants (movement_id, equipment)
+    VALUES (${inserted!.id}, ${'other'})
+  `
+  const movement = await movementWithVariants(ctx.db, inserted!.id)
+  return json(movement, 201)
+}
+
 type TemplateRow = {
   id: string
   trainer_id: string
@@ -350,10 +408,14 @@ type ExerciseRow = {
   reps_max: number | null
   method: SetMethod
   method_target: unknown
+  category: ExerciseCategory | null
+  load_prescription: string | null
   tempo_eccentric: unknown
   tempo_pause_bottom: unknown
   tempo_concentric: unknown
   tempo_pause_top: unknown
+  tempo_mode: TempoMode | null
+  tempo_per_rep: unknown
   rest_after_set_seconds: number | null
   rest_after_exercise_seconds: number | null
   superset_group: string | null
@@ -375,10 +437,14 @@ function mapExercise(row: ExerciseRow): TemplateExercise {
     repsMax: row.reps_max,
     method: row.method,
     methodTarget: asNumber(row.method_target),
+    category: row.category,
+    loadPrescription: row.load_prescription,
     tempoEccentric: asNumber(row.tempo_eccentric),
     tempoPauseBottom: asNumber(row.tempo_pause_bottom),
     tempoConcentric: asNumber(row.tempo_concentric),
     tempoPauseTop: asNumber(row.tempo_pause_top),
+    tempoMode: row.tempo_mode === 'per_rep' ? 'per_rep' : 'default',
+    tempoPerRep: parseJsonColumn<Tempo[]>(row.tempo_per_rep, []),
     restAfterSetSeconds: row.rest_after_set_seconds,
     restAfterExerciseSeconds: row.rest_after_exercise_seconds,
     supersetGroup: row.superset_group,
@@ -394,7 +460,7 @@ function mapTemplate(row: TemplateRow, exercises?: TemplateExercise[]): WorkoutT
     trainerId: row.trainer_id,
     name: row.name,
     notes: row.notes,
-    warmup: parseJsonColumn<WarmupStep[]>(row.warmup, []),
+    warmup: warmupToText(row.warmup),
     createdAt: asIso(row.created_at) ?? '',
     updatedAt: asIso(row.updated_at) ?? '',
     exercises,
@@ -454,7 +520,7 @@ export async function handleUpdateTemplate(ctx: AppContext, id: string, req: Req
   const body = (await req.json()) as {
     name?: string
     notes?: string | null
-    warmup?: WarmupStep[]
+    warmup?: string
   }
   const existing = await ctx.db.sql<TemplateRow>`
     SELECT * FROM workout_templates
@@ -464,9 +530,7 @@ export async function handleUpdateTemplate(ctx: AppContext, id: string, req: Req
   const name = body.name?.trim() ?? existing[0].name
   const notes = body.notes === undefined ? existing[0].notes : body.notes
   const warmup =
-    body.warmup === undefined
-      ? existing[0].warmup
-      : body.warmup
+    body.warmup === undefined ? warmupToText(existing[0].warmup) : body.warmup
   const [row] = await ctx.db.sql<TemplateRow>`
     UPDATE workout_templates
     SET name = ${name},
@@ -520,10 +584,14 @@ export async function handleUpsertExercise(
         reps_max = ${body.repsMax ?? null},
         method = ${body.method ?? 'straight'},
         method_target = ${body.methodTarget ?? null},
+        category = ${body.category ?? 'accessory'},
+        load_prescription = ${body.loadPrescription || null},
         tempo_eccentric = ${body.tempoEccentric ?? null},
         tempo_pause_bottom = ${body.tempoPauseBottom ?? null},
         tempo_concentric = ${body.tempoConcentric ?? null},
         tempo_pause_top = ${body.tempoPauseTop ?? null},
+        tempo_mode = ${body.tempoMode ?? 'default'},
+        tempo_per_rep = CAST(${JSON.stringify(body.tempoPerRep ?? [])} AS jsonb),
         rest_after_set_seconds = ${body.restAfterSetSeconds ?? null},
         rest_after_exercise_seconds = ${body.restAfterExerciseSeconds ?? null},
         superset_group = ${body.supersetGroup || null},
@@ -551,16 +619,19 @@ export async function handleUpsertExercise(
   const [row] = await ctx.db.sql<ExerciseRow>`
     INSERT INTO template_exercises (
       template_id, sort_order, movement_id, variant_id, equipment,
-      set_count, reps_min, reps_max, method, method_target,
+      set_count, reps_min, reps_max, method, method_target, category, load_prescription,
       tempo_eccentric, tempo_pause_bottom, tempo_concentric, tempo_pause_top,
+      tempo_mode, tempo_per_rep,
       rest_after_set_seconds, rest_after_exercise_seconds,
       superset_group, superset_order, notes, youtube_url
     ) VALUES (
       ${templateId}, ${sortOrder}, ${body.movementId!}, ${body.variantId ?? null},
       ${body.equipment ?? null}, ${body.setCount ?? 3}, ${body.repsMin ?? 8},
       ${body.repsMax ?? null}, ${body.method ?? 'straight'}, ${body.methodTarget ?? null},
+      ${body.category ?? 'accessory'}, ${body.loadPrescription || null},
       ${body.tempoEccentric ?? null}, ${body.tempoPauseBottom ?? null},
       ${body.tempoConcentric ?? null}, ${body.tempoPauseTop ?? null},
+      ${body.tempoMode ?? 'default'}, CAST(${JSON.stringify(body.tempoPerRep ?? [])} AS jsonb),
       ${body.restAfterSetSeconds ?? null}, ${body.restAfterExerciseSeconds ?? null},
       ${body.supersetGroup || null}, ${body.supersetOrder ?? null},
       ${body.notes ?? null}, ${body.youtubeUrl ?? null}
@@ -575,6 +646,47 @@ export async function handleUpsertExercise(
   `
   await ctx.db.sql`UPDATE workout_templates SET updated_at = NOW() WHERE id = ${templateId}`
   return json(mapExercise(inserted[0]!), 201)
+}
+
+export async function handleReorderExercises(
+  ctx: AppContext,
+  templateId: string,
+  req: Request,
+) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const owned = await ctx.db.sql<{ id: string }>`
+    SELECT id FROM workout_templates
+    WHERE id = ${templateId} AND trainer_id = ${ctx.trainer!.id}
+  `
+  if (!owned[0]) return error('Template not found', 404)
+
+  const body = (await req.json()) as { exerciseIds?: string[] }
+  const exerciseIds = body.exerciseIds ?? []
+  const existing = await loadExercises(ctx.db, templateId)
+  const existingIds = new Set(existing.map((ex) => ex.id))
+  if (
+    exerciseIds.length !== existing.length ||
+    new Set(exerciseIds).size !== exerciseIds.length ||
+    exerciseIds.some((id) => !existingIds.has(id))
+  ) {
+    return error('Exercise order does not match this workout')
+  }
+
+  for (let i = 0; i < exerciseIds.length; i++) {
+    await ctx.db.sql`
+      UPDATE template_exercises
+      SET sort_order = ${i}
+      WHERE id = ${exerciseIds[i]!} AND template_id = ${templateId}
+    `
+  }
+  await ctx.db.sql`UPDATE workout_templates SET updated_at = NOW() WHERE id = ${templateId}`
+  const rows = await ctx.db.sql<TemplateRow>`
+    SELECT * FROM workout_templates
+    WHERE id = ${templateId} AND trainer_id = ${ctx.trainer!.id}
+  `
+  const exercises = await loadExercises(ctx.db, templateId)
+  return json(mapTemplate(rows[0]!, exercises))
 }
 
 export async function handleDeleteExercise(
@@ -640,7 +752,7 @@ async function buildPrescription(db: Db, templateId: string): Promise<Prescripti
   if (!template) throw new Error('Template missing')
   const exercises = await loadExercises(db, templateId)
   return {
-    warmup: parseJsonColumn<WarmupStep[]>(template.warmup, []),
+    warmup: warmupToText(template.warmup),
     exercises: exercises.map(
       (ex): PrescribedExercise => ({
         movementId: ex.movementId,
@@ -652,12 +764,16 @@ async function buildPrescription(db: Db, templateId: string): Promise<Prescripti
         repsMax: ex.repsMax,
         method: ex.method,
         methodTarget: ex.methodTarget,
+        category: ex.category,
+        loadPrescription: ex.loadPrescription,
         tempo: {
           eccentric: ex.tempoEccentric,
           pauseBottom: ex.tempoPauseBottom,
           concentric: ex.tempoConcentric,
           pauseTop: ex.tempoPauseTop,
         },
+        tempoMode: ex.tempoMode,
+        tempoPerRep: ex.tempoPerRep,
         restAfterSetSeconds: ex.restAfterSetSeconds,
         restAfterExerciseSeconds: ex.restAfterExerciseSeconds,
         supersetGroup: ex.supersetGroup,
@@ -692,10 +808,13 @@ function mapSession(row: SessionRow, logs: SetLog[] = []): Session {
     name: row.name,
     scheduledDate: asDate(row.scheduled_date),
     status: row.status,
-    prescription: parseJsonColumn<Prescription>(row.prescription, {
-      warmup: [],
-      exercises: [],
-    }),
+    prescription: (() => {
+      const prescription = parseJsonColumn<Prescription>(row.prescription, {
+        warmup: '',
+        exercises: [],
+      })
+      return { ...prescription, warmup: warmupToText(prescription.warmup) }
+    })(),
     loggedDurationSeconds: row.logged_duration_seconds,
     completedAt: asIso(row.completed_at),
     logs,

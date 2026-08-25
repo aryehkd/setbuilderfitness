@@ -4,6 +4,7 @@ import {
   handleActivity,
   handleAdHoc,
   handleAssignSession,
+  handleCreateMovement,
   handleCreateTemplate,
   handleDeleteExercise,
   handleDeleteSession,
@@ -19,6 +20,7 @@ import {
   handleMovements,
   handleOnboarding,
   handlePastWorkouts,
+  handleReorderExercises,
   handleTrainerClients,
   handleTrainerLookup,
   handleUpdateTemplate,
@@ -41,6 +43,11 @@ export default async (req: Request) => {
       if (!loaded.ok) return loaded.response
       return await handleMovements(req)
     }
+    if (path === '/api/movements' && req.method === 'POST') {
+      const loaded = await loadContext(req)
+      if (!loaded.ok) return loaded.response
+      return await handleCreateMovement(loaded.ctx, req)
+    }
 
     const loaded = await loadContext(req)
     if (!loaded.ok) return loaded.response
@@ -60,6 +67,11 @@ export default async (req: Request) => {
     }
     if (path === '/api/templates' && req.method === 'POST') {
       return await handleCreateTemplate(ctx, req)
+    }
+
+    const templateExerciseReorder = path.match(/^\/api\/templates\/([^/]+)\/exercises\/reorder$/)
+    if (templateExerciseReorder && req.method === 'PUT') {
+      return await handleReorderExercises(ctx, templateExerciseReorder[1]!, req)
     }
 
     const templateExercise = path.match(
