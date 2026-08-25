@@ -14,6 +14,7 @@ import type {
   WarmupStep,
   WorkoutTemplate,
 } from '../../shared/types.ts'
+import { devAuthEnabled, devPersonaFromRequest } from './devAuth.ts'
 import { MOVEMENT_SEEDS } from './movements.ts'
 import {
   asDate,
@@ -48,10 +49,13 @@ export type AppContext = {
   client: ClientRow | null
 }
 
-export async function loadContext(): Promise<
-  { ok: true; ctx: AppContext } | { ok: false; response: Response }
-> {
-  const identity = await getUser()
+export async function loadContext(
+  req?: Request,
+): Promise<{ ok: true; ctx: AppContext } | { ok: false; response: Response }> {
+  let identity = await getUser()
+  if (!identity && devAuthEnabled()) {
+    identity = devPersonaFromRequest(req)
+  }
   if (!identity) return { ok: false, response: error('Unauthorized', 401) }
 
   const db = getDatabase()
@@ -227,9 +231,16 @@ export async function handleOnboarding(ctx: AppContext, req: Request) {
     `
   }
 
-  const loaded = await loadContext()
+  const loaded = await loadContext(req)
   if (!loaded.ok) return loaded.response
   return handleGetMe(loaded.ctx)
+}
+
+/** Local-only: wipe the current dev persona so onboarding can be replayed. */
+export async function handleDevReset(ctx: AppContext) {
+  if (!devAuthEnabled()) return error('Not found', 404)
+  await ctx.db.sql`DELETE FROM users WHERE id = ${ctx.user.id}`
+  return json({ ok: true })
 }
 
 export async function handleTrainerLookup(req: Request) {

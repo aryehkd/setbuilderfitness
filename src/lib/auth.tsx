@@ -1,23 +1,22 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useState,
   type ReactNode,
 } from 'react'
 import {
-  getUser,
   handleAuthCallback,
   logout as identityLogout,
   oauthLogin,
   onAuthChange,
-  type User,
 } from '@netlify/identity'
-import { api } from './api.ts'
+import { api, ApiError } from './api.ts'
+import { clearDevPersona } from './devPersona.ts'
 import type { MeResponse } from '../../shared/types.ts'
 
 type AuthState = {
-  identity: User | null
   me: MeResponse | null
   loading: boolean
   login: () => void
@@ -28,59 +27,61 @@ type AuthState = {
 const AuthContext = createContext<AuthState | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [identity, setIdentity] = useState<User | null>(null)
   const [me, setMe] = useState<MeResponse | null>(null)
   const [loading, setLoading] = useState(true)
 
-  const refreshMe = async () => {
-    const user = await getUser()
-    setIdentity(user)
-    if (!user) {
+  // The API is the source of truth for who is signed in: in production it reads
+  // the Identity cookie, and in local dev it resolves the dev persona.
+  const refreshMe = useCallback(async () => {
+    try {
+      setMe(await api<MeResponse>('/api/me'))
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setMe(null)
+        return
+      }
+      console.error('Failed to load session', err)
       setMe(null)
-      return
     }
-    const data = await api<MeResponse>('/api/me')
-    setMe(data)
-  }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
         await handleAuthCallback()
-        if (!cancelled) await refreshMe()
       } catch {
-        if (!cancelled) {
-          setIdentity(null)
-          setMe(null)
-        }
-      } finally {
-        if (!cancelled) setLoading(false)
+        // No Identity backend on this origin (local dev); fall through to /api/me.
       }
+      if (!cancelled) await refreshMe()
+      if (!cancelled) setLoading(false)
     })()
-    const unsub = onAuthChange(() => {
+
+    const unsubscribe = onAuthChange(() => {
       void refreshMe()
     })
     return () => {
       cancelled = true
-      unsub()
+      unsubscribe()
     }
-  }, [])
+  }, [refreshMe])
 
   const login = () => {
     oauthLogin('google')
   }
 
   const logout = async () => {
-    await identityLogout()
-    setIdentity(null)
+    try {
+      await identityLogout()
+    } catch {
+      // Ignore: no Identity backend locally.
+    }
+    if (import.meta.env.DEV) clearDevPersona()
     setMe(null)
   }
 
   return (
-    <AuthContext.Provider
-      value={{ identity, me, loading, login, logout, refreshMe }}
-    >
+    <AuthContext.Provider value={{ me, loading, login, logout, refreshMe }}>
       {children}
     </AuthContext.Provider>
   )

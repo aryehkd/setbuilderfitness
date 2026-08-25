@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AppShell } from './components/AppShell.tsx'
+import { DevBar } from './components/DevBar.tsx'
 import { useAuth } from './lib/auth.tsx'
 import { ClientDetailPage } from './pages/ClientDetailPage.tsx'
 import { ClientHomePage } from './pages/ClientHomePage.tsx'
@@ -12,13 +13,15 @@ import { TemplateEditorPage } from './pages/TemplateEditorPage.tsx'
 import { TrainerHomePage } from './pages/TrainerHomePage.tsx'
 import { WorkoutListPage } from './pages/WorkoutListPage.tsx'
 
+function Loading() {
+  return <div className="flex min-h-svh items-center justify-center text-muted">Loading…</div>
+}
+
 function Guard({ children }: { children: ReactNode }) {
-  const { loading, identity, me } = useAuth()
-  if (loading) {
-    return <div className="flex min-h-svh items-center justify-center text-muted">Loading…</div>
-  }
-  if (!identity) return <Navigate to="/login" replace />
-  if (!me?.user.onboardingCompleted) return <Navigate to="/onboarding" replace />
+  const { loading, me } = useAuth()
+  if (loading) return <Loading />
+  if (!me) return <Navigate to="/login" replace />
+  if (!me.user.onboardingCompleted) return <Navigate to="/onboarding" replace />
   return children
 }
 
@@ -59,15 +62,17 @@ function NotFound() {
 }
 
 export default function App() {
-  const { loading, identity, me } = useAuth()
+  const { loading, me } = useAuth()
 
   return (
-    <Routes>
+    <>
+      {import.meta.env.DEV && <DevBar />}
+      <Routes>
       <Route
         path="/login"
         element={
-          !loading && identity ? (
-            <Navigate to={me?.user.onboardingCompleted ? '/' : '/onboarding'} replace />
+          !loading && me ? (
+            <Navigate to={me.user.onboardingCompleted ? '/' : '/onboarding'} replace />
           ) : (
             <LoginPage />
           )
@@ -77,10 +82,10 @@ export default function App() {
         path="/onboarding"
         element={
           loading ? (
-            <div className="flex min-h-svh items-center justify-center text-muted">Loading…</div>
-          ) : !identity ? (
+            <Loading />
+          ) : !me ? (
             <Navigate to="/login" replace />
-          ) : me?.user.onboardingCompleted ? (
+          ) : me.user.onboardingCompleted ? (
             <Navigate to="/" replace />
           ) : (
             <OnboardingPage />
@@ -122,7 +127,8 @@ export default function App() {
           }
         />
       </Route>
-      <Route path="*" element={<NotFound />} />
-    </Routes>
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </>
   )
 }

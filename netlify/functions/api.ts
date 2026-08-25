@@ -8,6 +8,7 @@ import {
   handleDeleteExercise,
   handleDeleteSession,
   handleDeleteTemplate,
+  handleDevReset,
   handleExerciseHistory,
   handleGetMe,
   handleGetSession,
@@ -36,14 +37,18 @@ export default async (req: Request) => {
       return await handleTrainerLookup(req)
     }
     if (path === '/api/movements' && req.method === 'GET') {
-      const loaded = await loadContext()
+      const loaded = await loadContext(req)
       if (!loaded.ok) return loaded.response
       return await handleMovements(req)
     }
 
-    const loaded = await loadContext()
+    const loaded = await loadContext(req)
     if (!loaded.ok) return loaded.response
     const { ctx } = loaded
+
+    if (path === '/api/dev/reset' && req.method === 'POST') {
+      return await handleDevReset(ctx)
+    }
 
     if (path === '/api/me' && req.method === 'GET') return await handleGetMe(ctx)
     if (path === '/api/onboarding' && req.method === 'POST') {

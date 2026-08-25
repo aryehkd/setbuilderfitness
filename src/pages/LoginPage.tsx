@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { getSettings } from '@netlify/identity'
 import { Button } from '../components/ui.tsx'
 import { useAuth } from '../lib/auth.tsx'
+import { DEV_PERSONAS, setDevPersona } from '../lib/devPersona.ts'
 
 type IdentityState =
   | { status: 'checking' }
@@ -58,13 +59,36 @@ export function LoginPage() {
           </div>
         )}
 
-        {identityState.status === 'unavailable' && (
+        {identityState.status === 'unavailable' && !import.meta.env.DEV && (
           <div className="space-y-2 rounded-xl border border-line bg-ink p-4 text-sm text-muted">
             <p className="font-medium text-[#e8eadf]">Sign-in is not available on this origin.</p>
             <p>
               Netlify Identity is a hosted service with no local backend, so Google login only
               works on a deployed Netlify site with Identity enabled.
             </p>
+          </div>
+        )}
+
+        {import.meta.env.DEV && identityState.status !== 'checking' && (
+          <div className="space-y-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+            <p className="text-sm text-amber-200">
+              Identity has no local backend. Sign in with a dev persona instead.
+            </p>
+            <div className="flex gap-2">
+              {DEV_PERSONAS.map((p) => (
+                <Button
+                  key={p.key}
+                  variant="ghost"
+                  className="flex-1"
+                  onClick={() => {
+                    setDevPersona(p.key)
+                    window.location.assign('/')
+                  }}
+                >
+                  {p.label}
+                </Button>
+              ))}
+            </div>
           </div>
         )}
 
