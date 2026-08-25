@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getSettings } from '@netlify/identity'
+import { MissingIdentityError, getSettings } from '@netlify/identity'
 import { Button } from '../components/ui.tsx'
 import { useAuth } from '../lib/auth.tsx'
 import { DEV_PERSONAS, setDevPersona } from '../lib/devPersona.ts'
@@ -7,7 +7,8 @@ import { DEV_PERSONAS, setDevPersona } from '../lib/devPersona.ts'
 type IdentityState =
   | { status: 'checking' }
   | { status: 'ready'; google: boolean }
-  | { status: 'unavailable' }
+  | { status: 'not-enabled' }
+  | { status: 'unreachable' }
 
 export function LoginPage() {
   const { login } = useAuth()
@@ -21,8 +22,11 @@ export function LoginPage() {
           setIdentityState({ status: 'ready', google: Boolean(settings.providers?.google) })
         }
       })
-      .catch(() => {
-        if (!cancelled) setIdentityState({ status: 'unavailable' })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setIdentityState({
+          status: err instanceof MissingIdentityError ? 'not-enabled' : 'unreachable',
+        })
       })
     return () => {
       cancelled = true
@@ -59,13 +63,20 @@ export function LoginPage() {
           </div>
         )}
 
-        {identityState.status === 'unavailable' && !import.meta.env.DEV && (
+        {identityState.status === 'not-enabled' && !import.meta.env.DEV && (
           <div className="space-y-2 rounded-xl border border-line bg-ink p-4 text-sm text-muted">
-            <p className="font-medium text-[#e8eadf]">Sign-in is not available on this origin.</p>
+            <p className="font-medium text-[#e8eadf]">Identity is not enabled for this project.</p>
             <p>
-              Netlify Identity is a hosted service with no local backend, so Google login only
-              works on a deployed Netlify site with Identity enabled.
+              Turn it on in the Netlify dashboard under Project configuration → Identity, then add
+              Google under External providers.
             </p>
+          </div>
+        )}
+
+        {identityState.status === 'unreachable' && !import.meta.env.DEV && (
+          <div className="space-y-2 rounded-xl border border-line bg-ink p-4 text-sm text-muted">
+            <p className="font-medium text-[#e8eadf]">Sign-in is temporarily unavailable.</p>
+            <p>The Identity service could not be reached. Try again in a moment.</p>
           </div>
         )}
 

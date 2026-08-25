@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { Button, Card, Field, TextInput } from '../components/ui.tsx'
 import { PrescribedExerciseCard, RestAfterMovement, SupersetFrame, groupBySuperset } from '../components/PrescribedExerciseCard.tsx'
 import { api } from '../lib/api.ts'
@@ -9,6 +9,7 @@ import { warmupToText } from '../../shared/types.ts'
 
 export function SessionDetailPage() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const { me } = useAuth()
   const isClient = me?.user.role === 'client'
   const [session, setSession] = useState<Session | null>(null)
@@ -81,10 +82,19 @@ export function SessionDetailPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
-      <div>
-        <p className="text-sm text-muted">{session.scheduledDate}</p>
-        <h1 className="font-display text-3xl font-bold">{session.name}</h1>
-        <p className="text-xs uppercase text-muted">{session.status}</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm text-muted">{session.scheduledDate}</p>
+          <h1 className="font-display text-3xl font-bold">{session.name}</h1>
+          <p className="text-xs uppercase text-muted">{session.status}</p>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => navigate(isClient ? '/' : `/clients/${session.clientId}`)}
+        >
+          Exit
+        </Button>
       </div>
 
       {warmup ? (
