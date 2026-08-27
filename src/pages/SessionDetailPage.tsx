@@ -1,10 +1,23 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Button, Card, Field, TextInput } from '../components/ui.tsx'
-import { PrescribedExerciseCard, RestAfterMovement, SupersetFrame, groupBySuperset } from '../components/PrescribedExerciseCard.tsx'
+import {
+  PrescribedExerciseCard,
+  RestAfterMovement,
+  SupersetFrame,
+  groupBySuperset,
+  setTarget,
+} from '../components/PrescribedExerciseCard.tsx'
+import { SessionPrescriptionEditor } from '../components/SessionPrescriptionEditor.tsx'
 import { api } from '../lib/api.ts'
 import { useAuth } from '../lib/auth.tsx'
-import type { ExerciseHistoryEntry, Session, SetLog } from '../../shared/types.ts'
+import type {
+  ExerciseHistoryEntry,
+  Movement,
+  Prescription,
+  Session,
+  SetLog,
+} from '../../shared/types.ts'
 import { warmupToText } from '../../shared/types.ts'
 
 export function SessionDetailPage() {
@@ -16,6 +29,11 @@ export function SessionDetailPage() {
   const [duration, setDuration] = useState('')
   const [historyFor, setHistoryFor] = useState<string | null>(null)
   const [history, setHistory] = useState<ExerciseHistoryEntry[]>([])
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<{ name: string; prescription: Prescription } | null>(null)
+  const [movements, setMovements] = useState<Movement[]>([])
+  const [savingAssignment, setSavingAssignment] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
 
   const logMap = useMemo(() => {
     const map = new Map<string, SetLog>()
@@ -76,26 +94,158 @@ export function SessionDetailPage() {
     setHistory(rows)
   }
 
+  const startEditing = async () => {
+    if (!session) return
+    setEditError(null)
+    setDraft({
+      name: session.name,
+      prescription: structuredClone(session.prescription),
+    })
+    setEditing(true)
+    if (movements.length === 0) {
+      try {
+        setMovements(await api<Movement[]>('/api/movements?q='))
+      } catch (err) {
+        setEditError(err instanceof Error ? err.message : 'Could not load movements')
+      }
+    }
+  }
+
+  const saveAssignment = async () => {
+    if (!id || !session || !draft) return
+    setSavingAssignment(true)
+    setEditError(null)
+    try {
+      const updated = await api<Session>(`/api/sessions/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(draft),
+      })
+      setSession({
+        ...updated,
+        clientName: session.clientName,
+      })
+      setEditing(false)
+      setDraft(null)
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : 'Could not save assigned workout')
+      await load()
+      setEditing(false)
+      setDraft(null)
+    } finally {
+      setSavingAssignment(false)
+    }
+  }
+
+  const cancelEditing = () => {
+    setEditing(false)
+    setDraft(null)
+    setEditError(null)
+  }
+
   if (!session) return <p className="p-6 text-muted">Loading session…</p>
+
+  const assignmentEditable =
+    !isClient && session.status === 'assigned' && session.logs.length === 0
+
+  if (editing && draft) {
+    return (
+      <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm text-muted">
+              {session.scheduledDate}
+              {session.clientName ? ` · ${session.clientName}` : ''}
+            </p>
+            <h1 className="break-words font-display text-2xl font-bold sm:text-3xl">
+              Edit assigned workout
+            </h1>
+            <p className="text-sm text-muted">
+              These changes apply only to this client&apos;s assigned workout.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={savingAssignment}
+              onClick={cancelEditing}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={savingAssignment || !draft.name.trim()}
+              onClick={() => void saveAssignment()}
+            >
+              {savingAssignment ? 'Saving…' : 'Save changes'}
+            </Button>
+          </div>
+        </div>
+
+        <SessionPrescriptionEditor
+          name={draft.name}
+          prescription={draft.prescription}
+          movements={movements}
+          onChange={setDraft}
+        />
+
+        {editError && <p className="text-sm text-red-300">{editError}</p>}
+        <Card className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={savingAssignment}
+            onClick={cancelEditing}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={savingAssignment || !draft.name.trim()}
+            onClick={() => void saveAssignment()}
+          >
+            {savingAssignment ? 'Saving…' : 'Save changes'}
+          </Button>
+        </Card>
+      </div>
+    )
+  }
 
   const warmup = warmupToText(session.prescription.warmup)
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
-      <div className="flex items-start justify-between gap-3">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <p className="text-sm text-muted">{session.scheduledDate}</p>
-          <h1 className="font-display text-3xl font-bold">{session.name}</h1>
+          <h1 className="break-words font-display text-2xl font-bold sm:text-3xl">{session.name}</h1>
           <p className="text-xs uppercase text-muted">{session.status}</p>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => navigate(isClient ? '/' : `/clients/${session.clientId}`)}
-        >
-          Exit
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {assignmentEditable && (
+            <Button type="button" onClick={() => void startEditing()}>
+              Edit assigned workout
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => navigate(isClient ? '/' : `/clients/${session.clientId}`)}
+          >
+            Exit
+          </Button>
+        </div>
       </div>
+
+      {!isClient && !assignmentEditable && (
+        <Card>
+          <p className="text-sm text-muted">
+            This assigned workout is locked because client logging has started or the session is
+            no longer assigned.
+          </p>
+        </Card>
+      )}
+      {!editing && editError && <p className="text-sm text-red-300">{editError}</p>}
 
       {warmup ? (
         <Card>
@@ -117,14 +267,21 @@ export function SessionDetailPage() {
                 )
               }
             >
-              {isClient && (
-                <div className="space-y-2">
-                  {Array.from({ length: ex.setCount }, (_, setIndex) => {
-                    const log = logMap.get(`${exerciseIndex}-${setIndex}`)
-                    return (
-                      <div key={setIndex} className="grid grid-cols-[auto_1fr_1fr_auto] items-center gap-2">
+              <div className="space-y-2">
+                {Array.from({ length: ex.setCount }, (_, setIndex) => {
+                  const log = logMap.get(`${exerciseIndex}-${setIndex}`)
+                  const target = ex.perSetEnabled ? setTarget(ex, setIndex) : null
+                  return (
+                    <div key={setIndex} className="space-y-1">
+                      {target ? (
+                        <p className="text-xs text-muted">
+                          Set {setIndex + 1}: {target}
+                        </p>
+                      ) : null}
+                      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto]">
                         <span className="text-xs text-muted">Set {setIndex + 1}</span>
                         <TextInput
+                          disabled={!isClient}
                           placeholder="Weight"
                           value={log?.weight ?? ''}
                           onChange={(e) =>
@@ -134,7 +291,16 @@ export function SessionDetailPage() {
                           }
                         />
                         <TextInput
-                          placeholder="Reps"
+                          disabled={!isClient}
+                          className="col-start-2 sm:col-start-auto"
+                          placeholder={
+                            ex.perSetEnabled
+                              ? (setTarget(ex, setIndex) ??
+                                (ex.method === 'timed' ? 'Seconds' : 'Reps'))
+                              : ex.method === 'timed'
+                                ? 'Seconds'
+                                : 'Reps'
+                          }
                           value={log?.reps ?? ''}
                           onChange={(e) =>
                             updateLog(exerciseIndex, setIndex, {
@@ -142,9 +308,10 @@ export function SessionDetailPage() {
                             })
                           }
                         />
-                        <label className="flex items-center gap-2 text-xs">
+                        <label className="col-start-2 flex min-h-11 items-center gap-2 text-xs sm:col-start-auto sm:min-h-0">
                           <input
                             type="checkbox"
+                            disabled={!isClient}
                             checked={Boolean(log?.completed)}
                             onChange={(e) =>
                               updateLog(exerciseIndex, setIndex, { completed: e.target.checked })
@@ -153,10 +320,10 @@ export function SessionDetailPage() {
                           Done
                         </label>
                       </div>
-                    )
-                  })}
-                </div>
-              )}
+                    </div>
+                  )
+                })}
+              </div>
               {historyFor === ex.movementId && (
                 <div className="rounded-xl bg-ink p-3 text-sm">
                   <div className="mb-2 font-medium">Past results</div>
@@ -187,11 +354,11 @@ export function SessionDetailPage() {
           <Field label="Total workout time (minutes)">
             <TextInput value={duration} onChange={(e) => setDuration(e.target.value)} />
           </Field>
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={() => void save()}>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button className="w-full sm:w-auto" variant="ghost" onClick={() => void save()}>
               Save log
             </Button>
-            <Button onClick={() => void save('completed')}>Mark completed</Button>
+            <Button className="w-full sm:w-auto" onClick={() => void save('completed')}>Mark completed</Button>
           </div>
         </Card>
       )}

@@ -14,6 +14,7 @@ export type SetMethod =
   | 'rpe'
   | 'to_failure'
   | 'reps_range'
+  | 'timed'
 export type ExerciseCategory =
   | 'main_lift'
   | 'accessory'
@@ -62,6 +63,12 @@ export type Tempo = {
 
 export type TempoMode = 'default' | 'per_rep'
 
+export type SetPrescription = {
+  repsMin: number
+  repsMax?: number | null
+  loadPrescription?: string | null
+}
+
 export type PrescribedExercise = {
   movementId: string
   movementName: string
@@ -70,6 +77,8 @@ export type PrescribedExercise = {
   setCount: number
   repsMin: number
   repsMax?: number | null
+  perSetEnabled?: boolean
+  setPrescriptions?: SetPrescription[]
   method: SetMethod
   methodTarget?: number | null
   category?: ExerciseCategory | null
@@ -114,6 +123,8 @@ export type TemplateExercise = {
   setCount: number
   repsMin: number
   repsMax: number | null
+  perSetEnabled: boolean
+  setPrescriptions: SetPrescription[]
   method: SetMethod
   methodTarget: number | null
   category: ExerciseCategory | null
@@ -204,4 +215,10 @@ export type ExerciseHistoryEntry = {
   setIndex: number
   weight: number | null
   reps: number | null
+}
+
+export type LoggedMovement = {
+  id: string
+  name: string
+  aliases: string[]
 }

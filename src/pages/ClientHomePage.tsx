@@ -18,7 +18,11 @@ function monthMatrix(year: number, month: number) {
 export function ClientHomePage() {
   const now = new Date()
   const [cursor, setCursor] = useState({ y: now.getFullYear(), m: now.getMonth() })
-  const [view, setView] = useState<'calendar' | 'list'>('calendar')
+  const [view, setView] = useState<'calendar' | 'list'>(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches
+      ? 'list'
+      : 'calendar',
+  )
   const [sessions, setSessions] = useState<Session[]>([])
   const [adHocType, setAdHocType] = useState<AdHocType>('cardio')
   const [minutes, setMinutes] = useState('30')
@@ -72,18 +76,18 @@ export function ClientHomePage() {
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="font-display text-3xl font-bold">Your training</h1>
+        <h1 className="font-display text-2xl font-bold sm:text-3xl">Your training</h1>
         <div className="flex rounded-xl border border-line p-1 text-sm">
           <button
             type="button"
-            className={`rounded-lg px-3 py-1 ${view === 'calendar' ? 'bg-lime text-ink' : 'text-muted'}`}
+            className={`min-h-11 rounded-lg px-3 py-1 ${view === 'calendar' ? 'bg-lime text-ink' : 'text-muted'}`}
             onClick={() => setView('calendar')}
           >
             Calendar
           </button>
           <button
             type="button"
-            className={`rounded-lg px-3 py-1 ${view === 'list' ? 'bg-lime text-ink' : 'text-muted'}`}
+            className={`min-h-11 rounded-lg px-3 py-1 ${view === 'list' ? 'bg-lime text-ink' : 'text-muted'}`}
             onClick={() => setView('list')}
           >
             List
@@ -96,7 +100,7 @@ export function ClientHomePage() {
           <div className="mb-4 flex items-center justify-between">
             <button
               type="button"
-              className="text-sm text-muted"
+              className="min-h-11 text-sm text-muted"
               onClick={() =>
                 setCursor((c) =>
                   c.m === 0 ? { y: c.y - 1, m: 11 } : { y: c.y, m: c.m - 1 },
@@ -108,7 +112,7 @@ export function ClientHomePage() {
             <h2 className="font-semibold">{title}</h2>
             <button
               type="button"
-              className="text-sm text-muted"
+              className="min-h-11 text-sm text-muted"
               onClick={() =>
                 setCursor((c) =>
                   c.m === 11 ? { y: c.y + 1, m: 0 } : { y: c.y, m: c.m + 1 },
@@ -121,7 +125,8 @@ export function ClientHomePage() {
           <div className="grid grid-cols-7 gap-1 text-center text-xs text-muted">
             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
               <div key={d} className="py-1">
-                {d}
+                <span className="sm:hidden">{d.slice(0, 1)}</span>
+                <span className="hidden sm:inline">{d}</span>
               </div>
             ))}
             {cells.map((day, i) => {
@@ -133,7 +138,7 @@ export function ClientHomePage() {
               return (
                 <div
                   key={i}
-                  className="min-h-20 rounded-lg border border-line/70 p-1 text-left"
+                  className="min-h-14 min-w-0 rounded-lg border border-line/70 p-1 text-left sm:min-h-20"
                 >
                   <div className="text-xs text-muted">{day ?? ''}</div>
                   {daySessions.map((s) => (
@@ -156,11 +161,11 @@ export function ClientHomePage() {
           <ul className="divide-y divide-line">
             {sessions.map((s) => (
               <li key={s.id} className="py-3">
-                <Link to={`/sessions/${s.id}`} className="flex items-center justify-between">
-                  <span>
+                <Link to={`/sessions/${s.id}`} className="flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-between">
+                  <span className="break-words">
                     {s.scheduledDate} · {s.name}
                   </span>
-                  <span className="text-xs uppercase text-muted">{s.status}</span>
+                  <span className="shrink-0 text-xs uppercase text-muted">{s.status}</span>
                 </Link>
               </li>
             ))}
@@ -193,7 +198,9 @@ export function ClientHomePage() {
             <TextInput value={notes} onChange={(e) => setNotes(e.target.value)} />
           </Field>
         </div>
-        <Button onClick={() => void logAdHoc()}>Log activity</Button>
+        <Button className="w-full sm:w-auto" onClick={() => void logAdHoc()}>
+          Log activity
+        </Button>
         {message && <p className="text-sm text-lime">{message}</p>}
       </Card>
     </div>

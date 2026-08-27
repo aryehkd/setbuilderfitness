@@ -30,8 +30,8 @@ export function TrainerHomePage() {
             </span>
           </p>
         </div>
-        <Link to="/workouts">
-          <Button>New workout</Button>
+        <Link to="/workouts" className="w-full sm:w-auto">
+          <Button className="w-full sm:w-auto">New workout</Button>
         </Link>
       </div>
       <div className="grid gap-4 md:grid-cols-2">
@@ -47,10 +47,10 @@ export function TrainerHomePage() {
               <li key={c.id}>
                 <Link
                   to={`/clients/${c.id}`}
-                  className="flex items-center justify-between rounded-xl border border-line px-3 py-2 hover:border-lime"
+                  className="flex min-h-11 flex-col items-start gap-1 rounded-xl border border-line px-3 py-2 hover:border-lime sm:flex-row sm:items-center sm:justify-between"
                 >
-                  <span>{c.name || c.email}</span>
-                  <span className="text-xs text-muted">{c.upcomingCount} upcoming</span>
+                  <span className="min-w-0 break-words">{c.name || c.email}</span>
+                  <span className="shrink-0 text-xs text-muted">{c.upcomingCount} upcoming</span>
                 </Link>
               </li>
             ))}
@@ -77,11 +77,16 @@ export function TrainerHomePage() {
         {upcoming.length === 0 && <p className="text-sm text-muted">Nothing on the calendar yet.</p>}
         <ul className="divide-y divide-line">
           {upcoming.slice(0, 12).map((s) => (
-            <li key={s.id} className="flex items-center justify-between py-2 text-sm">
-              <span>
-                {s.scheduledDate} · {s.name}
-              </span>
-              <span className="text-muted">{s.clientName}</span>
+            <li key={s.id}>
+              <Link
+                to={`/sessions/${s.id}`}
+                className="flex min-h-14 flex-col items-start gap-1 py-3 text-sm hover:text-lime sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+              >
+                <span className="break-words">
+                  {s.scheduledDate} · {s.name}
+                </span>
+                <span className="shrink-0 text-muted">{s.clientName}</span>
+              </Link>
             </li>
           ))}
         </ul>

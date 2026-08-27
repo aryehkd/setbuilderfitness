@@ -16,6 +16,7 @@ import {
   handleGetTemplate,
   handleListSessions,
   handleListTemplates,
+  handleLoggedMovements,
   handleLogSession,
   handleMovements,
   handleOnboarding,
@@ -23,6 +24,7 @@ import {
   handleReorderExercises,
   handleTrainerClients,
   handleTrainerLookup,
+  handleUpdateSession,
   handleUpdateTemplate,
   handleUpsertExercise,
   loadContext,
@@ -116,6 +118,7 @@ export default async (req: Request) => {
         return await handleLogSession(ctx, id, req)
       }
       if (req.method === 'GET') return await handleGetSession(ctx, id)
+      if (req.method === 'PUT') return await handleUpdateSession(ctx, id, req)
       if (req.method === 'DELETE') return await handleDeleteSession(ctx, id)
     }
 
@@ -125,6 +128,9 @@ export default async (req: Request) => {
     }
     if (path === '/api/exercise-history' && req.method === 'GET') {
       return await handleExerciseHistory(ctx, req)
+    }
+    if (path === '/api/logged-movements' && req.method === 'GET') {
+      return await handleLoggedMovements(ctx, req)
     }
     if (path === '/api/past-workouts' && req.method === 'GET') {
       return await handlePastWorkouts(ctx)

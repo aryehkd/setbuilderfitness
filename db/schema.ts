@@ -101,6 +101,8 @@ export const templateExercises = pgTable(
     setCount: integer('set_count').notNull().default(3),
     repsMin: integer('reps_min').notNull().default(8),
     repsMax: integer('reps_max'),
+    perSetEnabled: boolean('per_set_enabled').notNull().default(false),
+    setPrescriptions: jsonb('set_prescriptions').notNull().default([]),
     method: text('method').notNull().default('straight'),
     methodTarget: numeric('method_target'),
     category: text('category').notNull().default('accessory'),

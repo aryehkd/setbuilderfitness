@@ -1,6 +1,14 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useParams } from 'react-router-dom'
-import { Button, Card, Field, TextArea, TextInput } from '../components/ui.tsx'
+import {
+  Button,
+  Card,
+  Field,
+  NumericTextInput,
+  Select,
+  TextArea,
+  TextInput,
+} from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
 import type {
   Equipment,
@@ -10,52 +18,34 @@ import type {
   Tempo,
   TempoMode,
   PrescribedExercise,
+  SetPrescription,
   TemplateExercise,
   WorkoutTemplate,
 } from '../../shared/types.ts'
 import { warmupToText } from '../../shared/types.ts'
-import { PrescribedExerciseCard, RestAfterMovement, SupersetFrame, groupBySuperset } from '../components/PrescribedExerciseCard.tsx'
-
-const METHODS: { value: SetMethod; label: string }[] = [
-  { value: 'straight', label: 'Straight reps' },
-  { value: 'reps_range', label: 'Reps range' },
-  { value: 'amrap', label: 'AMRAP' },
-  { value: 'rir', label: 'RIR' },
-  { value: 'rpe', label: 'RPE' },
-  { value: 'to_failure', label: 'To failure' },
-]
-
-const CATEGORIES: { value: ExerciseCategory; label: string }[] = [
-  { value: 'main_lift', label: 'Main lift' },
-  { value: 'accessory', label: 'Accessory' },
-  { value: 'warmup', label: 'Warmup' },
-  { value: 'finisher', label: 'Finisher' },
-  { value: 'rehab', label: 'Rehab' },
-  { value: 'plyo', label: 'Plyo' },
-]
-
-function allowsPerRepTempo(method: SetMethod) {
-  return method === 'straight' || method === 'reps_range'
-}
-
-function showsRepsField(method: SetMethod) {
-  return method !== 'amrap' && method !== 'rpe' && method !== 'to_failure'
-}
-
-function emptyTempo(): Tempo {
-  return { eccentric: null, pauseBottom: null, concentric: null, pauseTop: null }
-}
-
-function tempoRepCount(ex: Pick<TemplateExercise, 'method' | 'repsMin' | 'repsMax'>) {
-  if (ex.method === 'reps_range') return Math.max(1, ex.repsMax ?? ex.repsMin ?? 1)
-  return Math.max(1, ex.repsMin || 1)
-}
-
-function resizeTempoPerRep(current: Tempo[] | undefined, count: number) {
-  const next = (current ?? []).slice(0, count)
-  while (next.length < count) next.push(emptyTempo())
-  return next
-}
+import {
+  PrescribedExerciseCard,
+  RestAfterMovement,
+  SupersetFrame,
+  groupBySuperset,
+  setTarget,
+} from '../components/PrescribedExerciseCard.tsx'
+import {
+  ModeToggle,
+  TempoFields,
+  Toggle,
+} from '../components/WorkoutEditorControls.tsx'
+import {
+  CATEGORIES,
+  METHODS,
+  allowsPerRepTempo,
+  fallbackSetPrescription,
+  quantityLabel,
+  resizeSetPrescriptions,
+  resizeTempoPerRep,
+  showsRepsField,
+  tempoRepCount,
+} from '../components/WorkoutEditorUtils.ts'
 
 function emptyExercise(movement: Movement): Partial<TemplateExercise> {
   return {
@@ -66,6 +56,8 @@ function emptyExercise(movement: Movement): Partial<TemplateExercise> {
     setCount: 3,
     repsMin: 8,
     repsMax: null,
+    perSetEnabled: false,
+    setPrescriptions: [],
     method: 'straight',
     category: 'accessory',
     loadPrescription: null,
@@ -82,6 +74,21 @@ function emptyExercise(movement: Movement): Partial<TemplateExercise> {
 function supersetGroupKey(ex: TemplateExercise) {
   const key = ex.supersetGroup?.trim()
   return key || null
+}
+
+function nextSupersetGroup(exercises: TemplateExercise[]) {
+  const used = new Set(
+    exercises
+      .map((ex) => ex.supersetGroup?.trim())
+      .filter((key): key is string => Boolean(key)),
+  )
+  for (let i = 0; i < 26; i++) {
+    const letter = String.fromCharCode(65 + i)
+    if (!used.has(letter)) return letter
+  }
+  let n = 2
+  while (used.has(`A${n}`)) n += 1
+  return `A${n}`
 }
 
 function exerciseBlocks(exercises: TemplateExercise[]): TemplateExercise[][] {
@@ -127,6 +134,8 @@ function toPrescribed(ex: TemplateExercise): PrescribedExercise {
     setCount: ex.setCount,
     repsMin: ex.repsMin,
     repsMax: ex.repsMax,
+    perSetEnabled: ex.perSetEnabled,
+    setPrescriptions: ex.setPrescriptions,
     method: ex.method,
     methodTarget: ex.methodTarget,
     category: ex.category,
@@ -175,6 +184,15 @@ export function TemplateEditorPage() {
 
   const exercises = useMemo(() => template?.exercises ?? [], [template])
   const blocks = useMemo(() => exerciseBlocks(exercises), [exercises])
+  const nextGroup = useMemo(() => nextSupersetGroup(exercises), [exercises])
+  const existingGroups = useMemo(() => {
+    const list: string[] = []
+    for (const block of blocks) {
+      const key = supersetGroupKey(block[0]!)
+      if (key && !list.includes(key)) list.push(key)
+    }
+    return list
+  }, [blocks])
 
   const saveMeta = async (patch: Partial<WorkoutTemplate>) => {
     if (!id || !template) return
@@ -189,6 +207,52 @@ export function TemplateEditorPage() {
     })
     setTemplate(updated)
     setSaving(false)
+  }
+
+  const assignSuperset = async (exerciseId: string, group: string | null) => {
+    if (!id || !template) return
+    const current = exercises.find((item) => item.id === exerciseId)
+    if (!current) return
+    const oldGroup = supersetGroupKey(current)
+    if (oldGroup === group) return
+
+    setSaving(true)
+    try {
+      const members = exerciseBlocks(exercises)
+        .flat()
+        .filter((item) => item.id !== exerciseId && supersetGroupKey(item) === group)
+      const order = group ? members.length + 1 : null
+      await api(`/api/templates/${id}/exercises/${exerciseId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          ...current,
+          supersetGroup: group,
+          supersetOrder: order,
+        }),
+      })
+
+      const ids = exercises.map((item) => item.id).filter((itemId) => itemId !== exerciseId)
+      if (group && members.length > 0) {
+        const last = members[members.length - 1]!
+        ids.splice(ids.indexOf(last.id) + 1, 0, exerciseId)
+      } else {
+        ids.splice(
+          exercises.findIndex((item) => item.id === exerciseId),
+          0,
+          exerciseId,
+        )
+      }
+
+      let updated = await api<WorkoutTemplate>(`/api/templates/${id}/exercises/reorder`, {
+        method: 'PUT',
+        body: JSON.stringify({ exerciseIds: ids }),
+      })
+      if (group) updated = await renumberSuperset(updated, group)
+      if (oldGroup && oldGroup !== group) updated = await renumberSuperset(updated, oldGroup)
+      setTemplate(updated)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const renumberSuperset = async (tpl: WorkoutTemplate, group: string) => {
@@ -311,7 +375,7 @@ export function TemplateEditorPage() {
   const warmup = warmupToText(template.warmup)
 
   const header = (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
       {view === 'edit' ? (
         <TextInput
           value={template.name}
@@ -322,7 +386,7 @@ export function TemplateEditorPage() {
       ) : (
         <h1 className="min-w-0 flex-1 font-display text-2xl font-bold">{template.name}</h1>
       )}
-      <div className="flex shrink-0 items-center gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 sm:shrink-0 sm:justify-start">
         <ModeToggle
           value={view}
           options={[
@@ -359,20 +423,40 @@ export function TemplateEditorPage() {
               <Fragment key={ex.id}>
                 <PrescribedExerciseCard exercise={toPrescribed(ex)}>
                   <div className="space-y-2">
-                    {Array.from({ length: Math.max(0, ex.setCount) }, (_, setIndex) => (
-                      <div
-                        key={setIndex}
-                        className="grid grid-cols-[auto_1fr_1fr_auto] items-center gap-2 opacity-60"
-                      >
-                        <span className="text-xs text-muted">Set {setIndex + 1}</span>
-                        <TextInput placeholder="Weight" disabled value="" readOnly />
-                        <TextInput placeholder="Reps" disabled value="" readOnly />
-                        <label className="flex items-center gap-2 text-xs">
-                          <input type="checkbox" disabled />
-                          Done
-                        </label>
-                      </div>
-                    ))}
+                    {Array.from({ length: Math.max(0, ex.setCount) }, (_, setIndex) => {
+                      const target = ex.perSetEnabled ? setTarget(toPrescribed(ex), setIndex) : null
+                      return (
+                        <div key={setIndex} className="space-y-1">
+                          {target ? (
+                            <p className="text-xs text-muted">
+                              Set {setIndex + 1}: {target}
+                            </p>
+                          ) : null}
+                          <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 opacity-60 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto]">
+                            <span className="text-xs text-muted">Set {setIndex + 1}</span>
+                            <TextInput placeholder="Weight" disabled value="" readOnly />
+                            <TextInput
+                              className="col-start-2 sm:col-start-auto"
+                              placeholder={
+                                ex.perSetEnabled
+                                  ? (setTarget(toPrescribed(ex), setIndex) ??
+                                    (ex.method === 'timed' ? 'Seconds' : 'Reps'))
+                                  : ex.method === 'timed'
+                                    ? 'Seconds'
+                                    : 'Reps'
+                              }
+                              disabled
+                              value=""
+                              readOnly
+                            />
+                            <label className="col-start-2 flex min-h-11 items-center gap-2 text-xs sm:col-start-auto sm:min-h-0">
+                              <input type="checkbox" disabled />
+                              Done
+                            </label>
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 </PrescribedExerciseCard>
                 <RestAfterMovement seconds={ex.restAfterExerciseSeconds} />
@@ -449,8 +533,11 @@ export function TemplateEditorPage() {
               <ExerciseCard
                 exercise={ex}
                 index={blockStart + offset}
+                nextGroup={nextGroup}
+                existingGroups={existingGroups}
                 reorderControls={group ? null : reorderButtons}
                 onPatch={patchExercise}
+                onAssignSuperset={(groupName) => void assignSuperset(ex.id, groupName)}
                 onRemove={() => void removeExercise(ex.id)}
               />
               {group &&
@@ -544,7 +631,7 @@ function AddMovementSlot({
           type="button"
           title={label}
           aria-label={label}
-          className="flex h-8 w-8 items-center justify-center rounded-full border border-line text-lg leading-none text-muted hover:border-muted hover:text-white"
+          className="flex h-11 w-11 items-center justify-center rounded-full border border-line text-lg leading-none text-muted hover:border-muted hover:text-white"
           onClick={onOpen}
         >
           +
@@ -591,15 +678,17 @@ function AddMovementSlot({
           <li key={m.id}>
             <button
               type="button"
-              className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm ${
+              className={`flex min-h-11 w-full flex-col items-start justify-between gap-1 px-3 py-2 text-left text-sm sm:flex-row sm:items-center sm:gap-2 ${
                 i === active ? 'bg-lime/15 text-white' : 'text-muted hover:bg-ink'
               }`}
               onMouseEnter={() => setActive(i)}
               onClick={() => onSelect(m)}
             >
-              <span className="font-medium text-white">{m.name}</span>
+              <span className="min-w-0 break-words font-medium text-white">{m.name}</span>
               {m.muscleGroups.length > 0 && (
-                <span className="text-xs text-muted">{m.muscleGroups.join(', ')}</span>
+                <span className="break-words text-xs text-muted sm:text-right">
+                  {m.muscleGroups.join(', ')}
+                </span>
               )}
             </button>
           </li>
@@ -629,117 +718,23 @@ function AddMovementSlot({
   )
 }
 
-function Toggle({
-  value,
-  onChange,
-}: {
-  value: boolean
-  onChange: (next: boolean) => void
-}) {
-  return (
-    <div className="inline-flex rounded-xl border border-line p-1 text-sm">
-      <button
-        type="button"
-        className={`rounded-lg px-4 py-1.5 ${!value ? 'bg-lime text-ink' : 'text-muted'}`}
-        onClick={() => onChange(false)}
-      >
-        No
-      </button>
-      <button
-        type="button"
-        className={`rounded-lg px-4 py-1.5 ${value ? 'bg-lime text-ink' : 'text-muted'}`}
-        onClick={() => onChange(true)}
-      >
-        Yes
-      </button>
-    </div>
-  )
-}
-
-function ModeToggle<T extends string>({
-  value,
-  options,
-  onChange,
-}: {
-  value: T
-  options: { value: T; label: string }[]
-  onChange: (next: T) => void
-}) {
-  return (
-    <div className="inline-flex rounded-xl border border-line p-1 text-sm">
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          className={`rounded-lg px-4 py-1.5 ${
-            value === option.value ? 'bg-lime text-ink' : 'text-muted'
-          }`}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function TempoFields({
-  value,
-  onChange,
-}: {
-  value: Tempo
-  onChange: (next: Tempo, persist?: boolean) => void
-}) {
-  const num = (raw: string) => (raw ? Number(raw) : null)
-  return (
-    <div className="grid gap-3 sm:grid-cols-4">
-      <Field label="Time down (s)">
-        <TextInput
-          type="number"
-          value={value.eccentric ?? ''}
-          onChange={(e) => onChange({ ...value, eccentric: num(e.target.value) })}
-          onBlur={(e) => onChange({ ...value, eccentric: num(e.target.value) }, true)}
-        />
-      </Field>
-      <Field label="Pause (s)">
-        <TextInput
-          type="number"
-          value={value.pauseBottom ?? ''}
-          onChange={(e) => onChange({ ...value, pauseBottom: num(e.target.value) })}
-          onBlur={(e) => onChange({ ...value, pauseBottom: num(e.target.value) }, true)}
-        />
-      </Field>
-      <Field label="Time up (s)">
-        <TextInput
-          type="number"
-          value={value.concentric ?? ''}
-          onChange={(e) => onChange({ ...value, concentric: num(e.target.value) })}
-          onBlur={(e) => onChange({ ...value, concentric: num(e.target.value) }, true)}
-        />
-      </Field>
-      <Field label="Pause top (s)">
-        <TextInput
-          type="number"
-          value={value.pauseTop ?? ''}
-          onChange={(e) => onChange({ ...value, pauseTop: num(e.target.value) })}
-          onBlur={(e) => onChange({ ...value, pauseTop: num(e.target.value) }, true)}
-        />
-      </Field>
-    </div>
-  )
-}
-
 function ExerciseCard({
   exercise: ex,
   index,
+  nextGroup,
+  existingGroups,
   reorderControls,
   onPatch,
+  onAssignSuperset,
   onRemove,
 }: {
   exercise: TemplateExercise
   index: number
+  nextGroup: string
+  existingGroups: string[]
   reorderControls: ReactNode
   onPatch: (id: string, patch: Partial<TemplateExercise>, persist?: boolean) => void
+  onAssignSuperset: (group: string | null) => void
   onRemove: () => void
 }) {
   const [tempoOpen, setTempoOpen] = useState(false)
@@ -758,6 +753,33 @@ function ExerciseCard({
     onPatch(ex.id, patch, persist)
   }
 
+  const patchSetPrescription = (
+    setIndex: number,
+    patch: Partial<SetPrescription>,
+    persist = false,
+  ) => {
+    const next = resizeSetPrescriptions(
+      ex.setPrescriptions,
+      ex.setCount,
+      fallbackSetPrescription(ex),
+    )
+    next[setIndex] = { ...next[setIndex]!, ...patch }
+    onPatch(ex.id, { setPrescriptions: next }, persist)
+  }
+
+  const setPerSetEnabled = (enabled: boolean) => {
+    onPatch(
+      ex.id,
+      {
+        perSetEnabled: enabled,
+        setPrescriptions: enabled
+          ? resizeSetPrescriptions(ex.setPrescriptions, ex.setCount, fallbackSetPrescription(ex))
+          : [],
+      },
+      true,
+    )
+  }
+
   const changeMethod = (method: SetMethod) => {
     const patch: Partial<TemplateExercise> = { method }
     if (method === 'reps_range') {
@@ -765,11 +787,28 @@ function ExerciseCard({
     } else {
       patch.repsMax = null
     }
+    if (method === 'timed' && ex.method !== 'timed') {
+      patch.repsMin = 30
+    } else if (ex.method === 'timed' && method !== 'timed' && method !== 'reps_range') {
+      patch.repsMin = 8
+    }
     if (!allowsPerRepTempo(method)) {
       patch.tempoMode = 'default'
       patch.tempoPerRep = []
     } else if (ex.tempoMode === 'per_rep') {
       patch.tempoPerRep = resizeTempoPerRep(ex.tempoPerRep, tempoRepCount({ ...ex, ...patch }))
+    }
+    if (!showsRepsField(method)) {
+      patch.perSetEnabled = false
+      patch.setPrescriptions = []
+    } else if (ex.perSetEnabled) {
+      const repsMin = patch.repsMin ?? ex.repsMin
+      const repsMax = method === 'reps_range' ? (patch.repsMax ?? ex.repsMax) : null
+      patch.setPrescriptions = Array.from({ length: ex.setCount }, () => ({
+        repsMin,
+        repsMax,
+        loadPrescription: ex.loadPrescription,
+      }))
     }
     onPatch(ex.id, patch, true)
   }
@@ -795,8 +834,8 @@ function ExerciseCard({
 
   return (
     <Card className="space-y-3">
-      <div className="flex items-start justify-between gap-3">
-        <div>
+      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <div className="font-semibold">
             {ex.supersetGroup
               ? `${ex.supersetGroup}${ex.supersetOrder ?? index + 1} · `
@@ -808,75 +847,13 @@ function ExerciseCard({
             {ex.equipment ? ` · ${ex.equipment}` : ''}
           </div>
         </div>
-        <div className="flex flex-wrap justify-end gap-2">
+        <div className="flex flex-wrap gap-2 sm:justify-end">
           {reorderControls}
           <Button variant="danger" onClick={onRemove}>
             Remove
           </Button>
         </div>
       </div>
-      <div className={showReps ? 'grid gap-3 sm:grid-cols-2' : ''}>
-        <Field label="Sets">
-          <TextInput
-            type="number"
-            value={ex.setCount}
-            onChange={(e) => onPatch(ex.id, { setCount: Number(e.target.value) })}
-            onBlur={(e) => onPatch(ex.id, { setCount: Number(e.target.value) }, true)}
-          />
-        </Field>
-        {showReps &&
-          (isRange ? (
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Reps min">
-                <TextInput
-                  type="number"
-                  value={ex.repsMin}
-                  onChange={(e) => patchReps({ repsMin: Number(e.target.value) })}
-                  onBlur={(e) => patchReps({ repsMin: Number(e.target.value) }, true)}
-                />
-              </Field>
-              <Field label="Reps max">
-                <TextInput
-                  type="number"
-                  value={ex.repsMax ?? ''}
-                  onChange={(e) =>
-                    patchReps({ repsMax: e.target.value ? Number(e.target.value) : null })
-                  }
-                  onBlur={(e) =>
-                    patchReps(
-                      { repsMax: e.target.value ? Number(e.target.value) : null },
-                      true,
-                    )
-                  }
-                />
-              </Field>
-            </div>
-          ) : (
-            <Field label={ex.method === 'rir' ? 'RIR' : 'Reps'}>
-              <TextInput
-                type="number"
-                value={ex.repsMin}
-                onChange={(e) => patchReps({ repsMin: Number(e.target.value), repsMax: null })}
-                onBlur={(e) =>
-                  patchReps({ repsMin: Number(e.target.value), repsMax: null }, true)
-                }
-              />
-            </Field>
-          ))}
-      </div>
-      <Field label="Method">
-        <select
-          className="w-full rounded-xl border border-line bg-ink px-3 py-2.5 text-sm"
-          value={ex.method}
-          onChange={(e) => changeMethod(e.target.value as SetMethod)}
-        >
-          {METHODS.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-      </Field>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Category">
           <select
@@ -893,7 +870,200 @@ function ExerciseCard({
             ))}
           </select>
         </Field>
-        <Field label="Prescribed load">
+        <Field label="Method">
+          <select
+            className="w-full rounded-xl border border-line bg-ink px-3 py-2.5 text-sm"
+            value={ex.method}
+            onChange={(e) => changeMethod(e.target.value as SetMethod)}
+          >
+            {METHODS.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <div
+        className={
+          showReps
+            ? ex.perSetEnabled
+              ? 'grid grid-cols-[1fr_auto] items-end gap-3'
+              : 'grid gap-3 sm:grid-cols-2'
+            : ''
+        }
+      >
+        <Field label="Sets">
+          <NumericTextInput
+            value={ex.setCount}
+            onChange={(e) => {
+              const setCount = Number(e.target.value)
+              onPatch(ex.id, {
+                setCount,
+                ...(ex.perSetEnabled
+                  ? {
+                      setPrescriptions: resizeSetPrescriptions(
+                        ex.setPrescriptions,
+                        setCount,
+                        fallbackSetPrescription(ex),
+                      ),
+                    }
+                  : {}),
+              })
+            }}
+            onBlur={(e) => {
+              const setCount = Number(e.target.value)
+              onPatch(
+                ex.id,
+                {
+                  setCount,
+                  ...(ex.perSetEnabled
+                    ? {
+                        setPrescriptions: resizeSetPrescriptions(
+                          ex.setPrescriptions,
+                          setCount,
+                          fallbackSetPrescription(ex),
+                        ),
+                      }
+                    : {}),
+                },
+                true,
+              )
+            }}
+          />
+        </Field>
+        {showReps && ex.perSetEnabled && (
+          <div className="space-y-1.5">
+            <span className="block text-xs font-medium uppercase tracking-wide text-muted">
+              Each set
+            </span>
+            <Toggle value={ex.perSetEnabled} onChange={setPerSetEnabled} />
+          </div>
+        )}
+        {showReps &&
+          !ex.perSetEnabled &&
+          (isRange ? (
+            <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+              <Field label="Reps min">
+                <NumericTextInput
+                  value={ex.repsMin}
+                  onChange={(e) => patchReps({ repsMin: Number(e.target.value) })}
+                  onBlur={(e) => patchReps({ repsMin: Number(e.target.value) }, true)}
+                />
+              </Field>
+              <Field label="Reps max">
+                <NumericTextInput
+                  value={ex.repsMax ?? ''}
+                  onChange={(e) =>
+                    patchReps({ repsMax: e.target.value ? Number(e.target.value) : null })
+                  }
+                  onBlur={(e) =>
+                    patchReps(
+                      { repsMax: e.target.value ? Number(e.target.value) : null },
+                      true,
+                    )
+                  }
+                />
+              </Field>
+              <div className="space-y-1.5">
+                <span className="block text-xs font-medium uppercase tracking-wide text-muted">
+                  Each set
+                </span>
+                <Toggle value={ex.perSetEnabled} onChange={setPerSetEnabled} />
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+              <Field label={quantityLabel(ex.method)}>
+                <NumericTextInput
+                  value={ex.repsMin}
+                  onChange={(e) => patchReps({ repsMin: Number(e.target.value), repsMax: null })}
+                  onBlur={(e) =>
+                    patchReps({ repsMin: Number(e.target.value), repsMax: null }, true)
+                  }
+                />
+              </Field>
+              <div className="space-y-1.5">
+                <span className="block text-xs font-medium uppercase tracking-wide text-muted">
+                  Each set
+                </span>
+                <Toggle value={ex.perSetEnabled} onChange={setPerSetEnabled} />
+              </div>
+            </div>
+          ))}
+      </div>
+      {showReps && ex.perSetEnabled && (
+        <div className="space-y-3 rounded-xl border border-line p-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted">Each set</p>
+          {resizeSetPrescriptions(
+            ex.setPrescriptions,
+            ex.setCount,
+            fallbackSetPrescription(ex),
+          ).map((set, setIndex) => (
+            <div
+              key={setIndex}
+              className={`grid grid-cols-2 items-end gap-3 ${
+                isRange ? 'sm:grid-cols-[auto_1fr_1fr_1fr]' : 'sm:grid-cols-[auto_1fr_1fr]'
+              }`}
+            >
+              <span className="col-span-2 text-xs text-muted sm:col-span-1 sm:pb-2.5">
+                Set {setIndex + 1}
+              </span>
+              <Field label={isRange ? 'Min reps' : quantityLabel(ex.method)}>
+                <NumericTextInput
+                  value={set.repsMin}
+                  onChange={(e) =>
+                    patchSetPrescription(setIndex, { repsMin: Number(e.target.value) })
+                  }
+                  onBlur={(e) =>
+                    patchSetPrescription(setIndex, { repsMin: Number(e.target.value) }, true)
+                  }
+                />
+              </Field>
+              {isRange && (
+                <Field label="Max reps">
+                  <NumericTextInput
+                    value={set.repsMax ?? ''}
+                    onChange={(e) =>
+                      patchSetPrescription(setIndex, {
+                        repsMax: e.target.value ? Number(e.target.value) : null,
+                      })
+                    }
+                    onBlur={(e) =>
+                      patchSetPrescription(
+                        setIndex,
+                        { repsMax: e.target.value ? Number(e.target.value) : null },
+                        true,
+                      )
+                    }
+                  />
+                </Field>
+              )}
+              <div className={isRange ? 'col-span-2 sm:col-span-1' : ''}>
+                <Field label="Prescribed load (lb)">
+                  <TextInput
+                    value={set.loadPrescription ?? ''}
+                    onChange={(e) =>
+                      patchSetPrescription(setIndex, {
+                        loadPrescription: e.target.value || null,
+                      })
+                    }
+                    onBlur={(e) =>
+                      patchSetPrescription(
+                        setIndex,
+                        { loadPrescription: e.target.value || null },
+                        true,
+                      )
+                    }
+                  />
+                </Field>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {!ex.perSetEnabled && (
+        <Field label="Prescribed load (lb)">
           <TextInput
             value={ex.loadPrescription ?? ''}
             onChange={(e) => onPatch(ex.id, { loadPrescription: e.target.value || null })}
@@ -902,7 +1072,7 @@ function ExerciseCard({
             }
           />
         </Field>
-      </div>
+      )}
       <div className="space-y-2">
         {!tempoOpen ? (
           <Button
@@ -916,7 +1086,7 @@ function ExerciseCard({
         ) : (
           <>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <p className="text-xs font-medium uppercase tracking-wide text-muted">Tempo</p>
                 {allowPerRep && (
                   <ModeToggle
@@ -995,30 +1165,37 @@ function ExerciseCard({
           </span>
           <Toggle
             value={isSuperset}
-            onChange={(next) =>
-              onPatch(
-                ex.id,
-                next
-                  ? { supersetGroup: ex.supersetGroup || 'A', supersetOrder: ex.supersetOrder ?? 1 }
-                  : { supersetGroup: null, supersetOrder: null },
-                true,
-              )
-            }
+            onChange={(next) => onAssignSuperset(next ? nextGroup : null)}
           />
         </div>
         {isSuperset && (
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Superset group">
-              <TextInput
-                placeholder="A"
-                value={ex.supersetGroup ?? ''}
-                onChange={(e) => onPatch(ex.id, { supersetGroup: e.target.value || null })}
-                onBlur={(e) => onPatch(ex.id, { supersetGroup: e.target.value || null }, true)}
-              />
+              <Select
+                value={ex.supersetGroup ?? nextGroup}
+                onChange={(e) => onAssignSuperset(e.target.value || null)}
+              >
+                {[
+                  ...existingGroups,
+                  ...(ex.supersetGroup && !existingGroups.includes(ex.supersetGroup)
+                    ? [ex.supersetGroup]
+                    : []),
+                  ...(!existingGroups.includes(nextGroup) &&
+                  nextGroup !== ex.supersetGroup
+                    ? [nextGroup]
+                    : []),
+                ].map((groupName) => (
+                  <option key={groupName} value={groupName}>
+                    {groupName}
+                    {groupName === nextGroup && !existingGroups.includes(groupName)
+                      ? ' (new)'
+                      : ''}
+                  </option>
+                ))}
+              </Select>
             </Field>
             <Field label="Order in group">
-              <TextInput
-                type="number"
+              <NumericTextInput
                 value={ex.supersetOrder ?? ''}
                 onChange={(e) =>
                   onPatch(ex.id, {
@@ -1039,8 +1216,7 @@ function ExerciseCard({
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Rest after set (s)">
-          <TextInput
-            type="number"
+          <NumericTextInput
             value={ex.restAfterSetSeconds ?? ''}
             onChange={(e) =>
               onPatch(ex.id, {
@@ -1057,8 +1233,7 @@ function ExerciseCard({
           />
         </Field>
         <Field label="Rest after movement (s)">
-          <TextInput
-            type="number"
+          <NumericTextInput
             value={ex.restAfterExerciseSeconds ?? ''}
             onChange={(e) =>
               onPatch(ex.id, {

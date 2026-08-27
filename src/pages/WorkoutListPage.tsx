@@ -26,19 +26,19 @@ export function WorkoutListPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-3xl font-bold">Workouts</h1>
-        <Button onClick={() => void create()}>Create workout</Button>
+        <Button className="w-full sm:w-auto" onClick={() => void create()}>Create workout</Button>
       </div>
       <div className="grid gap-3">
         {templates.map((t) => (
-          <Card key={t.id} className="flex items-center justify-between">
-            <Link to={`/workouts/${t.id}`} className="font-medium hover:text-lime">
+          <Card key={t.id} className="flex items-center justify-between gap-3">
+            <Link to={`/workouts/${t.id}`} className="min-w-0 break-words font-medium hover:text-lime">
               {t.name}
             </Link>
             <button
               type="button"
-              className="text-xs text-red-300"
+              className="min-h-11 shrink-0 text-xs text-red-300 sm:min-h-0"
               onClick={async () => {
                 await api(`/api/templates/${t.id}`, { method: 'DELETE' })
                 load()

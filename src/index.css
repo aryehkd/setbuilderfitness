@@ -30,9 +30,11 @@ body {
   border: 0;
 }
 
-input,
-select,
-textarea,
-button {
-  font: inherit;
+@layer base {
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+  }
 }

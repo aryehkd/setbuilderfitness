@@ -35,10 +35,10 @@ export function LoginPage() {
 
   return (
     <div className="flex min-h-svh items-center justify-center bg-ink px-4 py-10">
-      <div className="w-full max-w-md space-y-6 rounded-3xl border border-line bg-panel p-8">
+      <div className="w-full max-w-md space-y-6 rounded-3xl border border-line bg-panel p-5 sm:p-8">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-lime">Trainer OS</p>
-          <h1 className="mt-2 font-display text-4xl font-bold tracking-tight">
+          <h1 className="mt-2 break-words font-display text-3xl font-bold tracking-tight sm:text-4xl">
             setbuilder.fitness
           </h1>
           <p className="mt-3 text-muted">
@@ -85,7 +85,7 @@ export function LoginPage() {
             <p className="text-sm text-amber-200">
               Identity has no local backend. Sign in with a dev persona instead.
             </p>
-            <div className="flex gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row">
               {DEV_PERSONAS.map((p) => (
                 <Button
                   key={p.key}

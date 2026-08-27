@@ -1,0 +1,3 @@
+ALTER TABLE template_exercises
+  ADD COLUMN IF NOT EXISTS per_set_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS set_prescriptions JSONB NOT NULL DEFAULT '[]';

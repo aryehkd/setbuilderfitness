@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Card } from './ui.tsx'
-import type { PrescribedExercise } from '../../shared/types.ts'
+import type { PrescribedExercise, Tempo } from '../../shared/types.ts'
 
 type SupersetItem = { supersetGroup?: string | null; supersetOrder?: number | null }
 
@@ -72,19 +72,46 @@ export function youtubeId(url: string) {
 }
 
 function summary(ex: PrescribedExercise) {
-  return [
-    ex.category?.replace('_', ' '),
-    ex.equipment,
-    ex.method === 'amrap' || ex.method === 'rpe' || ex.method === 'to_failure'
+  const quantity =
+    ex.perSetEnabled
+      ? `${ex.setCount} sets`
+      : ex.method === 'amrap' || ex.method === 'rpe' || ex.method === 'to_failure'
       ? `${ex.setCount} sets`
       : ex.method === 'rir'
         ? `${ex.setCount} × RIR ${ex.repsMin}`
-        : `${ex.setCount} × ${ex.repsMin}${ex.repsMax ? `–${ex.repsMax}` : ''}`,
-    ex.method === 'reps_range' ? 'rep range' : ex.method.replace('_', ' '),
-    ex.loadPrescription,
-  ]
+        : ex.method === 'timed'
+          ? `${ex.setCount} × ${ex.repsMin}s`
+          : `${ex.setCount} × ${ex.repsMin}${ex.repsMax ? `–${ex.repsMax}` : ''}`
+  const methodLabel = ex.method === 'reps_range' ? 'rep range' : ex.method.replace('_', ' ')
+  return [ex.category?.replace('_', ' '), ex.equipment, quantity, methodLabel, ex.perSetEnabled ? null : ex.loadPrescription]
     .filter(Boolean)
     .join(' · ')
+}
+
+export function setTarget(ex: PrescribedExercise, setIndex: number) {
+  const set = ex.setPrescriptions?.[setIndex]
+  if (!set) return null
+  const qty =
+    ex.method === 'timed'
+      ? `${set.repsMin}s`
+      : ex.method === 'rir'
+        ? `RIR ${set.repsMin}`
+        : `${set.repsMin}${set.repsMax != null ? `–${set.repsMax}` : ''} reps`
+  return [qty, set.loadPrescription].filter(Boolean).join(' · ')
+}
+
+export function formatTempo(tempo?: Tempo | null) {
+  if (!tempo) return ''
+  const phases: [number | null | undefined, string][] = [
+    [tempo.eccentric, 'down'],
+    [tempo.pauseBottom, 'pause bottom'],
+    [tempo.concentric, 'up'],
+    [tempo.pauseTop, 'pause top'],
+  ]
+  return phases
+    .filter(([seconds]) => seconds != null && seconds > 0)
+    .map(([seconds, label]) => `${seconds}s ${label}`)
+    .join(', ')
 }
 
 export function PrescribedExerciseCard({
@@ -97,25 +124,33 @@ export function PrescribedExerciseCard({
   children?: ReactNode
 }) {
   const vid = ex.youtubeUrl ? youtubeId(ex.youtubeUrl) : null
-  const tempo = [ex.tempo?.eccentric, ex.tempo?.pauseBottom, ex.tempo?.concentric, ex.tempo?.pauseTop]
-    .filter((v) => v != null)
-    .join(' / ')
+  const tempo = formatTempo(ex.tempo)
 
   return (
     <Card className="space-y-3">
-      <div className="flex items-start justify-between gap-3">
-        <div>
+      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <div className="font-semibold">
             {ex.supersetGroup ? `${ex.supersetGroup}${ex.supersetOrder ?? ''} · ` : ''}
             {ex.movementName}
           </div>
           <p className="text-sm text-muted">{summary(ex)}</p>
+          {ex.perSetEnabled && !children && (
+            <div className="mt-1 space-y-0.5 text-xs text-muted">
+              {Array.from({ length: ex.setCount }, (_, setIndex) => {
+                const target = setTarget(ex, setIndex)
+                return target ? (
+                  <p key={setIndex}>
+                    Set {setIndex + 1}: {target}
+                  </p>
+                ) : null
+              })}
+            </div>
+          )}
           {ex.tempoMode === 'per_rep' && (ex.tempoPerRep?.length ?? 0) > 0 ? (
             <div className="mt-1 space-y-0.5 text-xs text-muted">
               {ex.tempoPerRep!.map((t, i) => {
-                const line = [t.eccentric, t.pauseBottom, t.concentric, t.pauseTop]
-                  .filter((v) => v != null)
-                  .join(' / ')
+                const line = formatTempo(t)
                 return line ? (
                   <p key={i}>
                     Rep {i + 1} tempo: {line}
@@ -124,14 +159,14 @@ export function PrescribedExerciseCard({
               })}
             </div>
           ) : (
-            tempo && <p className="text-xs text-muted">Tempo (down / bottom / up / top): {tempo}</p>
+            tempo && <p className="text-xs text-muted">Tempo: {tempo}</p>
           )}
           {ex.restAfterSetSeconds != null && (
             <p className="text-xs text-muted">Rest {ex.restAfterSetSeconds}s between sets</p>
           )}
           {ex.notes && <p className="text-sm">{ex.notes}</p>}
         </div>
-        {actions}
+        {actions && <div className="flex shrink-0 flex-wrap gap-2">{actions}</div>}
       </div>
       {vid && (
         <iframe

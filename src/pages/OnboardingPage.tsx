@@ -84,7 +84,7 @@ export function OnboardingPage() {
           <Card className="space-y-4">
             <button
               type="button"
-              className="text-xs text-muted"
+              className="inline-flex min-h-11 items-center text-sm text-muted"
               onClick={() => {
                 setRole(null)
                 setLookup(null)
@@ -103,7 +103,7 @@ export function OnboardingPage() {
             {role === 'client' && (
               <div className="space-y-3">
                 <Field label="Trainer code">
-                  <div className="flex gap-2">
+                  <div className="flex flex-col gap-2 sm:flex-row">
                     <TextInput
                       value={code}
                       onChange={(e) => {
@@ -112,7 +112,7 @@ export function OnboardingPage() {
                       }}
                       placeholder="K7M2QX"
                     />
-                    <Button type="button" variant="ghost" onClick={() => void findTrainer()}>
+                    <Button className="w-full sm:w-auto" type="button" variant="ghost" onClick={() => void findTrainer()}>
                       Find
                     </Button>
                   </div>
@@ -127,6 +127,7 @@ export function OnboardingPage() {
             )}
             {error && <p className="text-sm text-red-300">{error}</p>}
             <Button
+              className="w-full sm:w-auto"
               disabled={busy || !name.trim() || (role === 'client' && !lookup)}
               onClick={() => void submit()}
             >

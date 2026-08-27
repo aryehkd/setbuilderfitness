@@ -40,7 +40,7 @@ export function DevBar() {
           key={p.key}
           type="button"
           onClick={() => switchTo(p.key)}
-          className={`rounded-md px-2 py-0.5 ${
+          className={`min-h-10 rounded-md px-2 py-0.5 ${
             persona === p.key ? 'bg-amber-400 text-ink' : 'hover:bg-amber-500/20'
           }`}
         >
@@ -53,7 +53,7 @@ export function DevBar() {
           clearDevPersona()
           window.location.assign('/login')
         }}
-        className="rounded-md px-2 py-0.5 hover:bg-amber-500/20"
+        className="min-h-10 rounded-md px-2 py-0.5 hover:bg-amber-500/20"
       >
         Sign out
       </button>
@@ -61,7 +61,7 @@ export function DevBar() {
         type="button"
         onClick={() => void resetPersona()}
         disabled={busy || persona === 'none'}
-        className="ml-auto rounded-md px-2 py-0.5 hover:bg-amber-500/20 disabled:opacity-50"
+        className="min-h-10 rounded-md px-2 py-0.5 hover:bg-amber-500/20 disabled:opacity-50 sm:ml-auto"
       >
         {busy ? 'Resetting…' : 'Reset this persona'}
       </button>

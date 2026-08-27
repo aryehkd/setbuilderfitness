@@ -9,6 +9,7 @@ import type {
   PrescribedExercise,
   Prescription,
   Session,
+  SetPrescription,
   SetLog,
   SetMethod,
   TemplateExercise,
@@ -271,6 +272,17 @@ function requireClient(ctx: AppContext) {
   return null
 }
 
+async function authorizedClient(ctx: AppContext, clientId: string | null) {
+  if (ctx.client && (!clientId || clientId === ctx.client.id)) return ctx.client
+  if (!ctx.trainer || !clientId) return null
+  const rows = await ctx.db.sql<ClientRow>`
+    SELECT id, user_id, trainer_id
+    FROM clients
+    WHERE id = ${clientId} AND trainer_id = ${ctx.trainer.id}
+  `
+  return rows[0] ?? null
+}
+
 export async function handleMovements(req: Request) {
   const url = new URL(req.url)
   const q = url.searchParams.get('q')?.trim()
@@ -406,6 +418,8 @@ type ExerciseRow = {
   set_count: number
   reps_min: number
   reps_max: number | null
+  per_set_enabled: boolean
+  set_prescriptions: unknown
   method: SetMethod
   method_target: unknown
   category: ExerciseCategory | null
@@ -435,6 +449,8 @@ function mapExercise(row: ExerciseRow): TemplateExercise {
     setCount: row.set_count,
     repsMin: row.reps_min,
     repsMax: row.reps_max,
+    perSetEnabled: row.per_set_enabled,
+    setPrescriptions: parseJsonColumn<SetPrescription[]>(row.set_prescriptions, []),
     method: row.method,
     methodTarget: asNumber(row.method_target),
     category: row.category,
@@ -582,6 +598,8 @@ export async function handleUpsertExercise(
         set_count = ${body.setCount ?? 3},
         reps_min = ${body.repsMin ?? 8},
         reps_max = ${body.repsMax ?? null},
+        per_set_enabled = ${body.perSetEnabled ?? false},
+        set_prescriptions = CAST(${JSON.stringify(body.setPrescriptions ?? [])} AS jsonb),
         method = ${body.method ?? 'straight'},
         method_target = ${body.methodTarget ?? null},
         category = ${body.category ?? 'accessory'},
@@ -619,7 +637,8 @@ export async function handleUpsertExercise(
   const [row] = await ctx.db.sql<ExerciseRow>`
     INSERT INTO template_exercises (
       template_id, sort_order, movement_id, variant_id, equipment,
-      set_count, reps_min, reps_max, method, method_target, category, load_prescription,
+      set_count, reps_min, reps_max, per_set_enabled, set_prescriptions,
+      method, method_target, category, load_prescription,
       tempo_eccentric, tempo_pause_bottom, tempo_concentric, tempo_pause_top,
       tempo_mode, tempo_per_rep,
       rest_after_set_seconds, rest_after_exercise_seconds,
@@ -627,7 +646,9 @@ export async function handleUpsertExercise(
     ) VALUES (
       ${templateId}, ${sortOrder}, ${body.movementId!}, ${body.variantId ?? null},
       ${body.equipment ?? null}, ${body.setCount ?? 3}, ${body.repsMin ?? 8},
-      ${body.repsMax ?? null}, ${body.method ?? 'straight'}, ${body.methodTarget ?? null},
+      ${body.repsMax ?? null}, ${body.perSetEnabled ?? false},
+      CAST(${JSON.stringify(body.setPrescriptions ?? [])} AS jsonb),
+      ${body.method ?? 'straight'}, ${body.methodTarget ?? null},
       ${body.category ?? 'accessory'}, ${body.loadPrescription || null},
       ${body.tempoEccentric ?? null}, ${body.tempoPauseBottom ?? null},
       ${body.tempoConcentric ?? null}, ${body.tempoPauseTop ?? null},
@@ -762,6 +783,8 @@ async function buildPrescription(db: Db, templateId: string): Promise<Prescripti
         setCount: ex.setCount,
         repsMin: ex.repsMin,
         repsMax: ex.repsMax,
+        perSetEnabled: ex.perSetEnabled,
+        setPrescriptions: ex.setPrescriptions,
         method: ex.method,
         methodTarget: ex.methodTarget,
         category: ex.category,
@@ -945,6 +968,101 @@ export async function handleGetSession(ctx: AppContext, id: string) {
   return json(mapSession(rows[0], logs))
 }
 
+function validSessionPrescription(value: unknown): value is Prescription {
+  if (!value || typeof value !== 'object') return false
+  const prescription = value as Partial<Prescription>
+  if (typeof prescription.warmup !== 'string' || !Array.isArray(prescription.exercises)) {
+    return false
+  }
+  if (prescription.exercises.length > 200) return false
+  const methods: SetMethod[] = [
+    'straight',
+    'reps_range',
+    'timed',
+    'amrap',
+    'rir',
+    'rpe',
+    'to_failure',
+  ]
+  return prescription.exercises.every((exercise) => {
+    if (!exercise || typeof exercise !== 'object') return false
+    if (
+      typeof exercise.movementId !== 'string' ||
+      !exercise.movementId ||
+      typeof exercise.movementName !== 'string' ||
+      !exercise.movementName.trim() ||
+      !Number.isInteger(exercise.setCount) ||
+      exercise.setCount < 0 ||
+      exercise.setCount > 100 ||
+      !Number.isFinite(exercise.repsMin) ||
+      !methods.includes(exercise.method)
+    ) {
+      return false
+    }
+    if (
+      exercise.repsMax != null &&
+      (!Number.isFinite(exercise.repsMax) || exercise.repsMax < exercise.repsMin)
+    ) {
+      return false
+    }
+    if (exercise.perSetEnabled) {
+      if (
+        !Array.isArray(exercise.setPrescriptions) ||
+        exercise.setPrescriptions.length !== exercise.setCount
+      ) {
+        return false
+      }
+      if (
+        exercise.setPrescriptions.some(
+          (set) =>
+            !Number.isFinite(set.repsMin) ||
+            (set.repsMax != null &&
+              (!Number.isFinite(set.repsMax) || set.repsMax < set.repsMin)),
+        )
+      ) {
+        return false
+      }
+    }
+    return true
+  })
+}
+
+export async function handleUpdateSession(ctx: AppContext, id: string, req: Request) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const body = (await req.json()) as {
+    name?: unknown
+    prescription?: unknown
+  }
+  const name = typeof body.name === 'string' ? body.name.trim() : ''
+  if (!name) return error('Workout name is required')
+  if (!validSessionPrescription(body.prescription)) {
+    return error('Invalid workout prescription')
+  }
+
+  const [updated] = await ctx.db.sql<SessionRow>`
+    UPDATE sessions AS s
+    SET
+      name = ${name},
+      prescription = CAST(${JSON.stringify(body.prescription)} AS jsonb)
+    WHERE s.id = ${id}
+      AND s.trainer_id = ${ctx.trainer!.id}
+      AND s.status = 'assigned'
+      AND NOT EXISTS (
+        SELECT 1 FROM session_set_logs AS l WHERE l.session_id = s.id
+      )
+    RETURNING s.*
+  `
+  if (updated) return json(mapSession(updated))
+
+  const owned = await ctx.db.sql<{ id: string }>`
+    SELECT id FROM sessions
+    WHERE id = ${id} AND trainer_id = ${ctx.trainer!.id}
+  `
+  if (!owned[0]) return error('Session not found', 404)
+  return error('This workout is locked because client logging has started', 409)
+}
+
 export async function handleLogSession(ctx: AppContext, id: string, req: Request) {
   const denied = requireClient(ctx)
   if (denied) return denied
@@ -1064,14 +1182,18 @@ export async function handleAdHoc(ctx: AppContext, req: Request) {
 export async function handleActivity(ctx: AppContext, req: Request) {
   const url = new URL(req.url)
   const year = Number(url.searchParams.get('year') || new Date().getFullYear())
+  const requestedClientId = url.searchParams.get('clientId')
+  const subjectClient = await authorizedClient(ctx, requestedClientId)
+  if (requestedClientId && !subjectClient) return error('Client not found', 404)
+  const subjectUserId = subjectClient?.user_id ?? ctx.user.id
   const start = `${year}-01-01`
   const end = `${year}-12-31`
 
-  const sessionRows = ctx.client
+  const sessionRows = subjectClient
     ? await ctx.db.sql<{ day: unknown; seconds: string }>`
         SELECT scheduled_date AS day, SUM(COALESCE(logged_duration_seconds, 0))::text AS seconds
         FROM sessions
-        WHERE client_id = ${ctx.client.id}
+        WHERE client_id = ${subjectClient.id}
           AND status = 'completed'
           AND scheduled_date >= ${start}::date
           AND scheduled_date <= ${end}::date
@@ -1082,7 +1204,7 @@ export async function handleActivity(ctx: AppContext, req: Request) {
   const adHocRows = await ctx.db.sql<{ day: unknown; seconds: string }>`
     SELECT logged_on AS day, SUM(duration_seconds)::text AS seconds
     FROM ad_hoc_logs
-    WHERE user_id = ${ctx.user.id}
+    WHERE user_id = ${subjectUserId}
       AND logged_on >= ${start}::date
       AND logged_on <= ${end}::date
     GROUP BY logged_on
@@ -1102,10 +1224,11 @@ export async function handleActivity(ctx: AppContext, req: Request) {
 }
 
 export async function handleExerciseHistory(ctx: AppContext, req: Request) {
-  const denied = requireClient(ctx)
-  if (denied) return denied
-  const movementId = new URL(req.url).searchParams.get('movementId')
+  const url = new URL(req.url)
+  const movementId = url.searchParams.get('movementId')
   if (!movementId) return error('movementId is required')
+  const subjectClient = await authorizedClient(ctx, url.searchParams.get('clientId'))
+  if (!subjectClient) return error('Client not found', 404)
   const rows = await ctx.db.sql<{
     scheduled_date: unknown
     name: string
@@ -1116,7 +1239,7 @@ export async function handleExerciseHistory(ctx: AppContext, req: Request) {
     SELECT s.scheduled_date, s.name, l.set_index, l.weight, l.reps
     FROM session_set_logs l
     JOIN sessions s ON s.id = l.session_id
-    WHERE s.client_id = ${ctx.client!.id}
+    WHERE s.client_id = ${subjectClient.id}
       AND l.completed = TRUE
       AND s.prescription -> 'exercises' -> l.exercise_index ->> 'movementId' = ${movementId}
     ORDER BY s.scheduled_date DESC, l.set_index ASC
@@ -1131,6 +1254,25 @@ export async function handleExerciseHistory(ctx: AppContext, req: Request) {
       reps: r.reps,
     })),
   )
+}
+
+export async function handleLoggedMovements(ctx: AppContext, req: Request) {
+  const subjectClient = await authorizedClient(
+    ctx,
+    new URL(req.url).searchParams.get('clientId'),
+  )
+  if (!subjectClient) return error('Client not found', 404)
+  const rows = await ctx.db.sql<{ id: string; name: string; aliases: string[] }>`
+    SELECT DISTINCT m.id, m.name, m.aliases
+    FROM session_set_logs l
+    JOIN sessions s ON s.id = l.session_id
+    JOIN movements m
+      ON m.id::text = s.prescription -> 'exercises' -> l.exercise_index ->> 'movementId'
+    WHERE s.client_id = ${subjectClient.id}
+      AND l.completed = TRUE
+    ORDER BY m.name
+  `
+  return json(rows)
 }
 
 export async function handlePastWorkouts(ctx: AppContext) {
