@@ -1,5 +1,7 @@
 import type {
+  Equipment,
   ExerciseCategory,
+  Movement,
   SetMethod,
   SetPrescription,
   Tempo,
@@ -23,6 +25,27 @@ export const CATEGORIES: { value: ExerciseCategory; label: string }[] = [
   { value: 'rehab', label: 'Rehab' },
   { value: 'plyo', label: 'Plyo' },
 ]
+
+export const EQUIPMENT: { value: Equipment; label: string }[] = [
+  { value: 'barbell', label: 'Barbell' },
+  { value: 'dumbbell', label: 'Dumbbell' },
+  { value: 'machine', label: 'Machine' },
+  { value: 'cable', label: 'Cable' },
+  { value: 'kettlebell', label: 'Kettlebell' },
+  { value: 'bodyweight', label: 'Bodyweight' },
+  { value: 'other', label: 'Other' },
+]
+
+export function movementDefaults(movement: Movement) {
+  const equipment = movement.defaultEquipment ?? movement.variants[0]?.equipment ?? null
+  const variant =
+    movement.variants.find((item) => item.equipment === equipment) ?? movement.variants[0]
+  return {
+    variantId: variant?.id ?? null,
+    equipment,
+    category: movement.defaultCategory ?? 'accessory',
+  }
+}
 
 export function allowsPerRepTempo(method: SetMethod) {
   return method === 'straight' || method === 'reps_range'

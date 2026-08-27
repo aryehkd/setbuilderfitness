@@ -12,14 +12,14 @@ export function Toggle({
     <div className="inline-flex rounded-xl border border-line p-1 text-sm">
       <button
         type="button"
-        className={`min-h-11 rounded-lg px-4 py-1.5 ${!value ? 'bg-lime text-ink' : 'text-muted'}`}
+        className={`min-h-11 rounded-lg px-4 py-1.5 ${!value ? 'bg-lime text-accent-contrast' : 'text-muted'}`}
         onClick={() => onChange(false)}
       >
         No
       </button>
       <button
         type="button"
-        className={`min-h-11 rounded-lg px-4 py-1.5 ${value ? 'bg-lime text-ink' : 'text-muted'}`}
+        className={`min-h-11 rounded-lg px-4 py-1.5 ${value ? 'bg-lime text-accent-contrast' : 'text-muted'}`}
         onClick={() => onChange(true)}
       >
         Yes
@@ -44,7 +44,7 @@ export function ModeToggle<T extends string>({
           key={option.value}
           type="button"
           className={`min-h-11 rounded-lg px-3 py-1.5 sm:px-4 ${
-            value === option.value ? 'bg-lime text-ink' : 'text-muted'
+            value === option.value ? 'bg-lime text-accent-contrast' : 'text-muted'
           }`}
           onClick={() => onChange(option.value)}
         >

@@ -1,18 +1,29 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import {
+  emptyProfileDraft,
+  isTrainerProfileComplete,
+  ProfileFields,
+} from '../components/ProfileFields.tsx'
 import { Button, Card, Field, TextInput } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
 import { useAuth } from '../lib/auth.tsx'
 import type { MeResponse, Role } from '../../shared/types.ts'
 
 export function OnboardingPage() {
-  const { refreshMe } = useAuth()
+  const { me, refreshMe } = useAuth()
   const navigate = useNavigate()
   const [role, setRole] = useState<Role | null>(null)
-  const [name, setName] = useState('')
-  const [bio, setBio] = useState('')
+  const [name, setName] = useState(me?.user.name || me?.identity.name || '')
   const [code, setCode] = useState('')
   const [lookup, setLookup] = useState<{ name: string; code: string } | null>(null)
+  const [profile, setProfile] = useState(() =>
+    emptyProfileDraft({
+      name: me?.user.name || me?.identity.name || '',
+      email: me?.user.email || me?.identity.email || '',
+      accentColor: me?.user.accentColor,
+    }),
+  )
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -35,12 +46,11 @@ export function OnboardingPage() {
     try {
       await api<MeResponse>('/api/onboarding', {
         method: 'POST',
-        body: JSON.stringify({
-          role,
-          name,
-          bio,
-          trainerCode: code,
-        }),
+        body: JSON.stringify(
+          role === 'trainer'
+            ? { role, ...profile }
+            : { role, name, trainerCode: code },
+        ),
       })
       await refreshMe()
       navigate('/')
@@ -51,9 +61,14 @@ export function OnboardingPage() {
     }
   }
 
+  const canFinish =
+    role === 'trainer'
+      ? isTrainerProfileComplete(profile)
+      : Boolean(name.trim() && lookup)
+
   return (
     <div className="flex min-h-svh items-center justify-center bg-ink px-4 py-10">
-      <div className="w-full max-w-lg space-y-4">
+      <div className={`w-full space-y-4 ${role === 'trainer' ? 'max-w-2xl' : 'max-w-lg'}`}>
         <h1 className="font-display text-3xl font-bold">Set up your account</h1>
         <p className="text-muted">This only happens once.</p>
         {!role && (
@@ -92,43 +107,55 @@ export function OnboardingPage() {
             >
               Change role
             </button>
-            <Field label="Your name">
-              <TextInput value={name} onChange={(e) => setName(e.target.value)} />
-            </Field>
-            {role === 'trainer' && (
-              <Field label="Bio (optional)">
-                <TextInput value={bio} onChange={(e) => setBio(e.target.value)} />
-              </Field>
-            )}
-            {role === 'client' && (
-              <div className="space-y-3">
-                <Field label="Trainer code">
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <TextInput
-                      value={code}
-                      onChange={(e) => {
-                        setCode(e.target.value.toUpperCase())
-                        setLookup(null)
-                      }}
-                      placeholder="K7M2QX"
-                    />
-                    <Button className="w-full sm:w-auto" type="button" variant="ghost" onClick={() => void findTrainer()}>
-                      Find
-                    </Button>
-                  </div>
-                </Field>
-                {lookup && (
-                  <p className="text-sm">
-                    Link to trainer <span className="font-semibold">{lookup.name}</span> (
-                    {lookup.code})?
+            {role === 'trainer' ? (
+              <>
+                <div>
+                  <h2 className="font-semibold">Your profile</h2>
+                  <p className="text-sm text-muted">
+                    Clients see this when they join you. Finish it to enter the app.
                   </p>
-                )}
-              </div>
+                </div>
+                <ProfileFields draft={profile} onChange={setProfile} />
+              </>
+            ) : (
+              <>
+                <Field label="Your name">
+                  <TextInput value={name} onChange={(e) => setName(e.target.value)} />
+                </Field>
+                <div className="space-y-3">
+                  <Field label="Trainer code">
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <TextInput
+                        value={code}
+                        onChange={(e) => {
+                          setCode(e.target.value.toUpperCase())
+                          setLookup(null)
+                        }}
+                        placeholder="K7M2QX"
+                      />
+                      <Button
+                        className="w-full sm:w-auto"
+                        type="button"
+                        variant="ghost"
+                        onClick={() => void findTrainer()}
+                      >
+                        Find
+                      </Button>
+                    </div>
+                  </Field>
+                  {lookup && (
+                    <p className="text-sm">
+                      Link to trainer <span className="font-semibold">{lookup.name}</span> (
+                      {lookup.code})?
+                    </p>
+                  )}
+                </div>
+              </>
             )}
             {error && <p className="text-sm text-red-300">{error}</p>}
             <Button
               className="w-full sm:w-auto"
-              disabled={busy || !name.trim() || (role === 'client' && !lookup)}
+              disabled={busy || !canFinish}
               onClick={() => void submit()}
             >
               Finish setup

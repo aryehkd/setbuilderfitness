@@ -31,7 +31,7 @@ export function Button({
 }) {
   const styles =
     variant === 'primary'
-      ? 'bg-lime text-ink hover:brightness-95'
+      ? 'bg-lime text-accent-contrast hover:brightness-95'
       : variant === 'danger'
         ? 'bg-red-900/40 text-red-200 hover:bg-red-900/60'
         : 'border border-line bg-transparent text-muted hover:text-white hover:border-muted'

@@ -6,6 +6,7 @@ import { Button, Card, Field, TextInput } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
 import type {
   ActivityDay,
+  Program,
   Session,
   TrainerClient,
   WorkoutTemplate,
@@ -15,24 +16,29 @@ export function ClientDetailPage() {
   const { id } = useParams()
   const [client, setClient] = useState<TrainerClient | null>(null)
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([])
+  const [programs, setPrograms] = useState<Program[]>([])
   const [sessions, setSessions] = useState<Session[]>([])
   const [activity, setActivity] = useState<ActivityDay[]>([])
   const [templateId, setTemplateId] = useState('')
+  const [programId, setProgramId] = useState('')
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
   const year = new Date().getFullYear()
 
   const load = async () => {
-    const [clients, tpls, sess, activityDays] = await Promise.all([
+    const [clients, tpls, programRows, sess, activityDays] = await Promise.all([
       api<TrainerClient[]>('/api/clients'),
       api<WorkoutTemplate[]>('/api/templates'),
+      api<Program[]>('/api/programs'),
       api<Session[]>(`/api/sessions?clientId=${id}`),
       api<ActivityDay[]>(`/api/activity?year=${year}&clientId=${id}`),
     ])
     setClient(clients.find((c) => c.id === id) ?? null)
     setTemplates(tpls)
+    setPrograms(programRows)
     setSessions(sess)
     setActivity(activityDays)
     if (!templateId && tpls[0]) setTemplateId(tpls[0].id)
+    if (!programId && programRows[0]) setProgramId(programRows[0].id)
   }
 
   useEffect(() => {
@@ -48,12 +54,21 @@ export function ClientDetailPage() {
     await load()
   }
 
+  const assignProgram = async () => {
+    if (!id || !programId) return
+    await api(`/api/programs/${programId}/assign`, {
+      method: 'POST',
+      body: JSON.stringify({ clientId: id, startDate: date }),
+    })
+    await load()
+  }
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
       <h1 className="break-words font-display text-3xl font-bold">{client?.name || 'Client'}</h1>
       <p className="break-all text-muted">{client?.email}</p>
       <Card>
-        <h2 className="mb-4 font-semibold">{year} training time</h2>
+        <h2 className="mb-4 font-semibold">{year} Completed sessions</h2>
         <Heatmap year={year} days={activity} />
       </Card>
       <Card className="space-y-3">
@@ -78,6 +93,40 @@ export function ClientDetailPage() {
           <div className="flex items-end">
             <Button className="w-full sm:w-auto" disabled={!templateId} onClick={() => void assign()}>
               Assign
+            </Button>
+          </div>
+        </div>
+      </Card>
+      <Card className="space-y-3">
+        <h2 className="font-semibold">Assign a program</h2>
+        <p className="text-sm text-muted">
+          Places every program workout on the client calendar, starting the week of the date you
+          pick. Each day is a unique assigned workout.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Program">
+            <select
+              className="w-full rounded-xl border border-line bg-ink px-3 py-2.5 text-sm"
+              value={programId}
+              onChange={(e) => setProgramId(e.target.value)}
+            >
+              {programs.map((program) => (
+                <option key={program.id} value={program.id}>
+                  {program.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Start week">
+            <TextInput type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </Field>
+          <div className="flex items-end">
+            <Button
+              className="w-full sm:w-auto"
+              disabled={!programId}
+              onClick={() => void assignProgram()}
+            >
+              Assign program
             </Button>
           </div>
         </div>

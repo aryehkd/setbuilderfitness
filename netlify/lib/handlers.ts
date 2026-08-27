@@ -16,6 +16,8 @@ import type {
   Tempo,
   TempoMode,
   WorkoutTemplate,
+  Program,
+  ProgramSession,
 } from '../../shared/types.ts'
 import { warmupToText } from '../../shared/types.ts'
 import { devAuthEnabled, devPersonaFromRequest } from './devAuth.ts'
@@ -39,6 +41,11 @@ type AppUser = {
   name: string
   role: 'trainer' | 'client' | null
   bio: string | null
+  phone: string | null
+  location: string | null
+  website: string | null
+  timezone: string | null
+  accent_color: string | null
   onboarding_completed_at: unknown
 }
 
@@ -63,10 +70,12 @@ export async function loadContext(
   if (!identity) return { ok: false, response: error('Unauthorized', 401) }
 
   const db = getDatabase()
-  await ensureMovements(db)
+  await ensureUserProfileColumns(db)
+  await ensureMovementCatalog(db)
+  await ensureProgramTables(db)
 
   const existing = await db.sql<AppUser>`
-    SELECT id, email, name, role, bio, onboarding_completed_at
+    SELECT id, email, name, role, bio, phone, location, website, timezone, accent_color, onboarding_completed_at
     FROM users WHERE id = ${identity.id}
   `
 
@@ -79,7 +88,7 @@ export async function loadContext(
         ${identity.email ?? ''},
         ${identity.name ?? ''}
       )
-      RETURNING id, email, name, role, bio, onboarding_completed_at
+      RETURNING id, email, name, role, bio, phone, location, website, timezone, accent_color, onboarding_completed_at
     `
     user = inserted[0]!
   }
@@ -103,7 +112,86 @@ export async function loadContext(
   }
 }
 
-async function ensureMovements(db: Db) {
+let userProfileColumnsReady = false
+let movementCatalogReady = false
+let programTablesReady = false
+
+async function ensureUserProfileColumns(db: Db) {
+  if (userProfileColumnsReady) return
+  await db.sql`
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS phone TEXT,
+      ADD COLUMN IF NOT EXISTS location TEXT,
+      ADD COLUMN IF NOT EXISTS website TEXT,
+      ADD COLUMN IF NOT EXISTS timezone TEXT,
+      ADD COLUMN IF NOT EXISTS accent_color TEXT
+  `
+  userProfileColumnsReady = true
+}
+
+async function ensureProgramTables(db: Db) {
+  if (programTablesReady) return
+  await db.sql`
+    CREATE TABLE IF NOT EXISTS programs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      trainer_id UUID NOT NULL REFERENCES trainers(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      notes TEXT,
+      week_count INT NOT NULL DEFAULT 4,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `
+  await db.sql`CREATE INDEX IF NOT EXISTS programs_trainer_id_idx ON programs (trainer_id)`
+  await db.sql`
+    CREATE TABLE IF NOT EXISTS program_sessions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      program_id UUID NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
+      template_id UUID REFERENCES workout_templates(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      week_index INT NOT NULL,
+      weekday INT NOT NULL,
+      prescription JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `
+  await db.sql`CREATE INDEX IF NOT EXISTS program_sessions_program_id_idx ON program_sessions (program_id)`
+  await db.sql`
+    UPDATE program_sessions ps
+    SET name = wt.name || ' - Week ' || (ps.week_index + 1)::text || ' - ' || p.name,
+        updated_at = NOW()
+    FROM workout_templates wt, programs p
+    WHERE ps.template_id = wt.id
+      AND ps.program_id = p.id
+      AND ps.name = wt.name
+  `
+  programTablesReady = true
+}
+
+async function ensureMovementCatalog(db: Db) {
+  if (!movementCatalogReady) {
+    await db.sql`
+      ALTER TABLE movements
+        ADD COLUMN IF NOT EXISTS trainer_id UUID REFERENCES trainers(id) ON DELETE CASCADE,
+        ADD COLUMN IF NOT EXISTS default_category TEXT,
+        ADD COLUMN IF NOT EXISTS default_equipment TEXT
+    `
+    await db.sql`CREATE INDEX IF NOT EXISTS movements_trainer_id_idx ON movements (trainer_id)`
+    await db.sql`DROP INDEX IF EXISTS movements_name_unique`
+    await db.sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS movements_shared_name_unique
+      ON movements (lower(name))
+      WHERE trainer_id IS NULL
+    `
+    await db.sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS movements_trainer_name_unique
+      ON movements (trainer_id, lower(name))
+      WHERE trainer_id IS NOT NULL
+    `
+    movementCatalogReady = true
+  }
+
   const [{ count }] = await db.sql<{ count: string }>`
     SELECT COUNT(*)::text AS count FROM movements
   `
@@ -111,12 +199,13 @@ async function ensureMovements(db: Db) {
 
   for (const seed of MOVEMENT_SEEDS) {
     const [movement] = await db.sql<{ id: string }>`
-      INSERT INTO movements (name, aliases, muscle_groups, youtube_url)
+      INSERT INTO movements (name, aliases, muscle_groups, youtube_url, default_equipment)
       VALUES (
         ${seed.name},
         ${seed.aliases ?? []},
         ${seed.muscles},
-        ${seed.youtube ?? null}
+        ${seed.youtube ?? null},
+        ${seed.equipment[0] ?? null}
       )
       RETURNING id
     `
@@ -129,9 +218,40 @@ async function ensureMovements(db: Db) {
   }
 }
 
+function catalogTrainerId(ctx: AppContext) {
+  return ctx.trainer?.id ?? ctx.client?.trainer_id ?? null
+}
+
+type MovementRow = {
+  id: string
+  name: string
+  aliases: string[]
+  muscle_groups: string[]
+  youtube_url: string | null
+  default_category: ExerciseCategory | null
+  default_equipment: Equipment | null
+}
+
+function mapMovement(
+  row: MovementRow,
+  variants: Movement['variants'],
+): Movement {
+  return {
+    id: row.id,
+    name: row.name,
+    aliases: row.aliases ?? [],
+    muscleGroups: row.muscle_groups ?? [],
+    youtubeUrl: row.youtube_url,
+    defaultCategory: row.default_category,
+    defaultEquipment: row.default_equipment,
+    variants,
+  }
+}
+
 export function mePayload(ctx: AppContext, extras?: {
   trainerName?: string | null
   trainerCode?: string | null
+  trainerAccentColor?: string | null
 }): MeResponse {
   return {
     identity: {
@@ -146,6 +266,12 @@ export function mePayload(ctx: AppContext, extras?: {
       name: ctx.user.name,
       role: ctx.user.role,
       bio: ctx.user.bio,
+      phone: ctx.user.phone,
+      location: ctx.user.location,
+      website: ctx.user.website,
+      timezone: ctx.user.timezone,
+      accentColor:
+        (ctx.trainer ? ctx.user.accent_color : extras?.trainerAccentColor) ?? '#c6f54e',
       onboardingCompleted: Boolean(ctx.user.onboarding_completed_at),
     },
     trainer: ctx.trainer
@@ -165,17 +291,103 @@ export function mePayload(ctx: AppContext, extras?: {
 export async function handleGetMe(ctx: AppContext) {
   let trainerName: string | null = null
   let trainerCode: string | null = null
+  let trainerAccentColor: string | null = null
   if (ctx.client?.trainer_id) {
-    const rows = await ctx.db.sql<{ name: string; code: string }>`
-      SELECT u.name, t.code
+    const rows = await ctx.db.sql<{ name: string; code: string; accent_color: string | null }>`
+      SELECT u.name, t.code, u.accent_color
       FROM trainers t
       JOIN users u ON u.id = t.user_id
       WHERE t.id = ${ctx.client.trainer_id}
     `
     trainerName = rows[0]?.name ?? null
     trainerCode = rows[0]?.code ?? null
+    trainerAccentColor = rows[0]?.accent_color ?? null
   }
-  return json(mePayload(ctx, { trainerName, trainerCode }))
+  return json(mePayload(ctx, { trainerName, trainerCode, trainerAccentColor }))
+}
+
+export async function handleGetAssignedTrainer(ctx: AppContext) {
+  const denied = requireClient(ctx)
+  if (denied) return denied
+  if (!ctx.client!.trainer_id) return error('No trainer assigned', 404)
+  const rows = await ctx.db.sql<{
+    id: string
+    name: string
+    email: string
+    phone: string | null
+    location: string | null
+    website: string | null
+    timezone: string | null
+    bio: string | null
+    code: string
+    accent_color: string | null
+  }>`
+    SELECT t.id, u.name, u.email, u.phone, u.location, u.website, u.timezone, u.bio, t.code, u.accent_color
+    FROM trainers t
+    JOIN users u ON u.id = t.user_id
+    WHERE t.id = ${ctx.client!.trainer_id}
+  `
+  const row = rows[0]
+  if (!row) return error('Trainer not found', 404)
+  return json({
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    phone: row.phone,
+    location: row.location,
+    website: row.website,
+    timezone: row.timezone,
+    bio: row.bio,
+    code: row.code,
+    accentColor: row.accent_color ?? '#c6f54e',
+  })
+}
+
+function optionalText(value: unknown) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed ? trimmed : null
+}
+
+export async function handleUpdateProfile(ctx: AppContext, req: Request) {
+  const body = (await req.json()) as {
+    name?: unknown
+    email?: unknown
+    phone?: unknown
+    location?: unknown
+    website?: unknown
+    timezone?: unknown
+    bio?: unknown
+    accentColor?: unknown
+  }
+  const name = optionalText(body.name)
+  const email = optionalText(body.email)
+  if (!name) return error('Name is required')
+  if (!email || !email.includes('@')) return error('A valid email is required')
+  const accentColor = optionalText(body.accentColor)
+  if (ctx.trainer && (!accentColor || !/^#[0-9a-f]{6}$/i.test(accentColor))) {
+    return error('Choose a valid accent color')
+  }
+
+  await ctx.db.sql`
+    UPDATE users
+    SET name = ${name},
+        email = ${email},
+        phone = ${optionalText(body.phone)},
+        location = ${optionalText(body.location)},
+        website = ${optionalText(body.website)},
+        timezone = ${optionalText(body.timezone)},
+        bio = ${optionalText(body.bio)},
+        accent_color = CASE
+          WHEN ${Boolean(ctx.trainer)} THEN ${accentColor}
+          ELSE accent_color
+        END
+    WHERE id = ${ctx.user.id}
+  `
+
+  const loaded = await loadContext(req)
+  if (!loaded.ok) return loaded.response
+  return handleGetMe(loaded.ctx)
 }
 
 export async function handleOnboarding(ctx: AppContext, req: Request) {
@@ -185,7 +397,13 @@ export async function handleOnboarding(ctx: AppContext, req: Request) {
   const body = (await req.json()) as {
     role?: string
     name?: string
+    email?: string
+    phone?: string
+    location?: string
+    website?: string
+    timezone?: string
     bio?: string
+    accentColor?: string
     trainerCode?: string
   }
   const name = body.name?.trim()
@@ -195,6 +413,16 @@ export async function handleOnboarding(ctx: AppContext, req: Request) {
   }
 
   if (body.role === 'trainer') {
+    const email = optionalText(body.email)
+    const timezone = optionalText(body.timezone)
+    const bio = optionalText(body.bio)
+    const accentColor = optionalText(body.accentColor)
+    if (!email || !email.includes('@')) return error('A valid email is required')
+    if (!timezone) return error('Timezone is required')
+    if (!bio) return error('Bio is required')
+    if (!accentColor || !/^#[0-9a-f]{6}$/i.test(accentColor)) {
+      return error('Choose a valid accent color')
+    }
     let code = generateTrainerCode()
     for (let i = 0; i < 8; i++) {
       const clash = await ctx.db.sql<{ id: string }>`
@@ -206,7 +434,13 @@ export async function handleOnboarding(ctx: AppContext, req: Request) {
     await ctx.db.sql`
       UPDATE users
       SET name = ${name},
-          bio = ${body.bio?.trim() || null},
+          email = ${email},
+          phone = ${optionalText(body.phone)},
+          location = ${optionalText(body.location)},
+          website = ${optionalText(body.website)},
+          timezone = ${timezone},
+          bio = ${bio},
+          accent_color = ${accentColor},
           role = 'trainer',
           onboarding_completed_at = NOW()
       WHERE id = ${ctx.user.id}
@@ -283,41 +517,70 @@ async function authorizedClient(ctx: AppContext, clientId: string | null) {
   return rows[0] ?? null
 }
 
-export async function handleMovements(req: Request) {
+export async function handleMovements(ctx: AppContext, req: Request) {
   const url = new URL(req.url)
   const q = url.searchParams.get('q')?.trim()
-  const db = getDatabase()
-  await ensureMovements(db)
-  const rows = q
-    ? await db.sql<{
-        id: string
-        name: string
-        aliases: string[]
-        muscle_groups: string[]
-        youtube_url: string | null
-      }>`
-        SELECT id, name, aliases, muscle_groups, youtube_url
-        FROM movements
-        WHERE name ILIKE ${'%' + q + '%'}
-           OR EXISTS (
-             SELECT 1 FROM unnest(aliases) a WHERE a ILIKE ${'%' + q + '%'}
-           )
-        ORDER BY name
-        LIMIT 80
-      `
-    : await db.sql<{
-        id: string
-        name: string
-        aliases: string[]
-        muscle_groups: string[]
-        youtube_url: string | null
-      }>`
-        SELECT id, name, aliases, muscle_groups, youtube_url
-        FROM movements
-        ORDER BY name
-      `
+  const trainerId = catalogTrainerId(ctx)
+  const search = q ? `%${q}%` : null
+  const rows = search
+    ? trainerId
+      ? await ctx.db.sql<MovementRow>`
+          SELECT id, name, aliases, muscle_groups, youtube_url, default_category, default_equipment
+          FROM movements
+          WHERE (trainer_id IS NULL OR trainer_id = ${trainerId})
+            AND (
+              name ILIKE ${search}
+              OR EXISTS (
+                SELECT 1 FROM unnest(aliases) a WHERE a ILIKE ${search}
+              )
+            )
+            AND NOT (
+              trainer_id IS NULL
+              AND EXISTS (
+                SELECT 1 FROM movements mine
+                WHERE mine.trainer_id = ${trainerId}
+                  AND lower(mine.name) = lower(movements.name)
+              )
+            )
+          ORDER BY name
+          LIMIT 80
+        `
+      : await ctx.db.sql<MovementRow>`
+          SELECT id, name, aliases, muscle_groups, youtube_url, default_category, default_equipment
+          FROM movements
+          WHERE trainer_id IS NULL
+            AND (
+              name ILIKE ${search}
+              OR EXISTS (
+                SELECT 1 FROM unnest(aliases) a WHERE a ILIKE ${search}
+              )
+            )
+          ORDER BY name
+          LIMIT 80
+        `
+    : trainerId
+      ? await ctx.db.sql<MovementRow>`
+          SELECT id, name, aliases, muscle_groups, youtube_url, default_category, default_equipment
+          FROM movements
+          WHERE (trainer_id IS NULL OR trainer_id = ${trainerId})
+            AND NOT (
+              trainer_id IS NULL
+              AND EXISTS (
+                SELECT 1 FROM movements mine
+                WHERE mine.trainer_id = ${trainerId}
+                  AND lower(mine.name) = lower(movements.name)
+              )
+            )
+          ORDER BY name
+        `
+      : await ctx.db.sql<MovementRow>`
+          SELECT id, name, aliases, muscle_groups, youtube_url, default_category, default_equipment
+          FROM movements
+          WHERE trainer_id IS NULL
+          ORDER BY name
+        `
 
-  const variants = await db.sql<{
+  const variants = await ctx.db.sql<{
     id: string
     movement_id: string
     equipment: Equipment
@@ -331,26 +594,12 @@ export async function handleMovements(req: Request) {
     byMovement.set(v.movement_id, list)
   }
 
-  const movements: Movement[] = rows.map((m) => ({
-    id: m.id,
-    name: m.name,
-    aliases: m.aliases ?? [],
-    muscleGroups: m.muscle_groups ?? [],
-    youtubeUrl: m.youtube_url,
-    variants: byMovement.get(m.id) ?? [],
-  }))
-  return json(movements)
+  return json(rows.map((row) => mapMovement(row, byMovement.get(row.id) ?? [])))
 }
 
 async function movementWithVariants(db: Db, id: string): Promise<Movement | null> {
-  const rows = await db.sql<{
-    id: string
-    name: string
-    aliases: string[]
-    muscle_groups: string[]
-    youtube_url: string | null
-  }>`
-    SELECT id, name, aliases, muscle_groups, youtube_url
+  const rows = await db.sql<MovementRow>`
+    SELECT id, name, aliases, muscle_groups, youtube_url, default_category, default_equipment
     FROM movements
     WHERE id = ${id}
   `
@@ -359,25 +608,55 @@ async function movementWithVariants(db: Db, id: string): Promise<Movement | null
   const variants = await db.sql<{ id: string; equipment: Equipment }>`
     SELECT id, equipment FROM movement_variants WHERE movement_id = ${id}
   `
-  return {
-    id: row.id,
-    name: row.name,
-    aliases: row.aliases ?? [],
-    muscleGroups: row.muscle_groups ?? [],
-    youtubeUrl: row.youtube_url,
-    variants: variants.map((v) => ({ id: v.id, equipment: v.equipment })),
-  }
+  return mapMovement(
+    row,
+    variants.map((v) => ({ id: v.id, equipment: v.equipment })),
+  )
 }
+
+const EQUIPMENT_VALUES: Equipment[] = [
+  'barbell',
+  'dumbbell',
+  'machine',
+  'cable',
+  'kettlebell',
+  'bodyweight',
+  'other',
+]
+const CATEGORY_VALUES: ExerciseCategory[] = [
+  'main_lift',
+  'accessory',
+  'warmup',
+  'finisher',
+  'rehab',
+  'plyo',
+]
 
 export async function handleCreateMovement(ctx: AppContext, req: Request) {
   const denied = requireTrainer(ctx)
   if (denied) return denied
-  const body = (await req.json()) as { name?: string }
+  const body = (await req.json()) as {
+    name?: string
+    category?: ExerciseCategory
+    equipment?: Equipment
+  }
   const name = body.name?.trim()
   if (!name) return error('Movement name is required')
+  const category = body.category
+  const equipment = body.equipment
+  if (!category || !CATEGORY_VALUES.includes(category)) {
+    return error('Category is required')
+  }
+  if (!equipment || !EQUIPMENT_VALUES.includes(equipment)) {
+    return error('Equipment is required')
+  }
 
   const existing = await ctx.db.sql<{ id: string }>`
-    SELECT id FROM movements WHERE lower(name) = lower(${name}) LIMIT 1
+    SELECT id FROM movements
+    WHERE lower(name) = lower(${name})
+      AND (trainer_id = ${ctx.trainer!.id} OR trainer_id IS NULL)
+    ORDER BY trainer_id NULLS LAST
+    LIMIT 1
   `
   if (existing[0]) {
     const movement = await movementWithVariants(ctx.db, existing[0].id)
@@ -385,13 +664,13 @@ export async function handleCreateMovement(ctx: AppContext, req: Request) {
   }
 
   const [inserted] = await ctx.db.sql<{ id: string }>`
-    INSERT INTO movements (name, aliases, muscle_groups)
-    VALUES (${name}, ${[]}, ${[]})
+    INSERT INTO movements (trainer_id, name, aliases, muscle_groups, default_category, default_equipment)
+    VALUES (${ctx.trainer!.id}, ${name}, ${[]}, ${[]}, ${category}, ${equipment})
     RETURNING id
   `
   await ctx.db.sql`
     INSERT INTO movement_variants (movement_id, equipment)
-    VALUES (${inserted!.id}, ${'other'})
+    VALUES (${inserted!.id}, ${equipment})
   `
   const movement = await movementWithVariants(ctx.db, inserted!.id)
   return json(movement, 201)
@@ -570,6 +849,395 @@ export async function handleDeleteTemplate(ctx: AppContext, id: string) {
   return json({ ok: true })
 }
 
+type ProgramRow = {
+  id: string
+  trainer_id: string
+  name: string
+  notes: string | null
+  week_count: number
+  created_at: unknown
+  updated_at: unknown
+}
+
+type ProgramSessionRow = {
+  id: string
+  program_id: string
+  template_id: string | null
+  name: string
+  week_index: number
+  weekday: number
+  prescription: unknown
+}
+
+function mapProgramSession(row: ProgramSessionRow): ProgramSession {
+  const prescription = parseJsonColumn<Prescription>(row.prescription, {
+    warmup: '',
+    exercises: [],
+  })
+  return {
+    id: row.id,
+    programId: row.program_id,
+    templateId: row.template_id,
+    name: row.name,
+    weekIndex: row.week_index,
+    weekday: row.weekday,
+    prescription: {
+      warmup: warmupToText(prescription.warmup),
+      exercises: prescription.exercises ?? [],
+    },
+  }
+}
+
+function mapProgram(row: ProgramRow, sessions: ProgramSession[] = []): Program {
+  return {
+    id: row.id,
+    trainerId: row.trainer_id,
+    name: row.name,
+    notes: row.notes,
+    weekCount: row.week_count,
+    createdAt: asIso(row.created_at) ?? '',
+    updatedAt: asIso(row.updated_at) ?? '',
+    sessions,
+  }
+}
+
+function programWorkoutName(sourceName: string, weekIndex: number, programName: string) {
+  const suffix = ` - ${programName}`
+  let baseName = sourceName.trim()
+  if (baseName.endsWith(suffix)) {
+    const withoutProgram = baseName.slice(0, -suffix.length)
+    baseName = withoutProgram.replace(/ - Week \d+$/, '')
+  }
+  return `${baseName} - Week ${weekIndex + 1} - ${programName}`
+}
+
+async function loadProgramSessions(db: Db, programId: string) {
+  const rows = await db.sql<ProgramSessionRow>`
+    SELECT * FROM program_sessions
+    WHERE program_id = ${programId}
+    ORDER BY week_index ASC, weekday ASC, created_at ASC
+  `
+  return rows.map(mapProgramSession)
+}
+
+async function ownedProgram(ctx: AppContext, id: string) {
+  const rows = await ctx.db.sql<ProgramRow>`
+    SELECT * FROM programs
+    WHERE id = ${id} AND trainer_id = ${ctx.trainer!.id}
+  `
+  return rows[0] ?? null
+}
+
+function mondayOf(iso: string) {
+  const date = new Date(`${iso}T00:00:00Z`)
+  if (Number.isNaN(date.getTime())) return null
+  const day = date.getUTCDay()
+  const offset = day === 0 ? -6 : 1 - day
+  date.setUTCDate(date.getUTCDate() + offset)
+  return date.toISOString().slice(0, 10)
+}
+
+function addUtcDays(iso: string, days: number) {
+  const date = new Date(`${iso}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+export async function handleListPrograms(ctx: AppContext) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const rows = await ctx.db.sql<ProgramRow>`
+    SELECT * FROM programs
+    WHERE trainer_id = ${ctx.trainer!.id}
+    ORDER BY updated_at DESC
+  `
+  return json(rows.map((row) => mapProgram(row)))
+}
+
+export async function handleCreateProgram(ctx: AppContext, req: Request) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const body = (await req.json()) as { name?: string; weekCount?: number }
+  const name = body.name?.trim() || 'New program'
+  const weekCount = Math.min(16, Math.max(1, Number(body.weekCount) || 4))
+  const [row] = await ctx.db.sql<ProgramRow>`
+    INSERT INTO programs (trainer_id, name, week_count)
+    VALUES (${ctx.trainer!.id}, ${name}, ${weekCount})
+    RETURNING *
+  `
+  return json(mapProgram(row!, []), 201)
+}
+
+export async function handleGetProgram(ctx: AppContext, id: string) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const row = await ownedProgram(ctx, id)
+  if (!row) return error('Program not found', 404)
+  const sessions = await loadProgramSessions(ctx.db, id)
+  return json(mapProgram(row, sessions))
+}
+
+export async function handleUpdateProgram(ctx: AppContext, id: string, req: Request) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const existing = await ownedProgram(ctx, id)
+  if (!existing) return error('Program not found', 404)
+  const body = (await req.json()) as {
+    name?: string
+    notes?: string | null
+    weekCount?: number
+  }
+  const name = body.name?.trim() ?? existing.name
+  const notes = body.notes === undefined ? existing.notes : body.notes
+  const weekCount = Math.min(
+    16,
+    Math.max(1, body.weekCount == null ? existing.week_count : Number(body.weekCount) || 1),
+  )
+  if (weekCount < existing.week_count) {
+    await ctx.db.sql`
+      DELETE FROM program_sessions
+      WHERE program_id = ${id} AND week_index >= ${weekCount}
+    `
+  }
+  if (name !== existing.name) {
+    const sessions = await ctx.db.sql<ProgramSessionRow>`
+      SELECT * FROM program_sessions WHERE program_id = ${id}
+    `
+    for (const session of sessions) {
+      const oldSuffix = ` - Week ${session.week_index + 1} - ${existing.name}`
+      if (!session.name.endsWith(oldSuffix)) continue
+      const baseName = session.name.slice(0, -oldSuffix.length)
+      await ctx.db.sql`
+        UPDATE program_sessions
+        SET name = ${programWorkoutName(baseName, session.week_index, name)},
+            updated_at = NOW()
+        WHERE id = ${session.id}
+      `
+    }
+  }
+  const [row] = await ctx.db.sql<ProgramRow>`
+    UPDATE programs
+    SET name = ${name},
+        notes = ${notes},
+        week_count = ${weekCount},
+        updated_at = NOW()
+    WHERE id = ${id}
+    RETURNING *
+  `
+  const sessions = await loadProgramSessions(ctx.db, id)
+  return json(mapProgram(row!, sessions))
+}
+
+export async function handleDeleteProgram(ctx: AppContext, id: string) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  await ctx.db.sql`
+    DELETE FROM programs WHERE id = ${id} AND trainer_id = ${ctx.trainer!.id}
+  `
+  return json({ ok: true })
+}
+
+export async function handleAddProgramSessions(ctx: AppContext, programId: string, req: Request) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const program = await ownedProgram(ctx, programId)
+  if (!program) return error('Program not found', 404)
+  const body = (await req.json()) as {
+    templateId?: string
+    programSessionId?: string
+    weekIndex?: number
+    weekday?: number
+    weekdays?: number[]
+    allWeeks?: boolean
+  }
+  if (!body.templateId && !body.programSessionId) return error('Workout is required')
+  if (body.templateId && body.programSessionId) return error('Choose one workout source')
+  const weekIndex = Number(body.weekIndex)
+  const seedWeekday = Number(body.weekday)
+  if (
+    !Number.isInteger(weekIndex) ||
+    weekIndex < 0 ||
+    weekIndex >= program.week_count ||
+    !Number.isInteger(seedWeekday) ||
+    seedWeekday < 0 ||
+    seedWeekday > 6
+  ) {
+    return error('Choose a valid day in this program')
+  }
+  const weekdays = (body.weekdays?.length ? body.weekdays : [seedWeekday])
+    .map(Number)
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+  if (weekdays.length === 0) return error('Choose at least one weekday')
+  let sourceName: string
+  let sourceTemplateId: string | null
+  let prescription: Prescription
+  if (body.templateId) {
+    const templates = await ctx.db.sql<TemplateRow>`
+      SELECT * FROM workout_templates
+      WHERE id = ${body.templateId} AND trainer_id = ${ctx.trainer!.id}
+    `
+    if (!templates[0]) return error('Workout not found', 404)
+    sourceName = templates[0].name
+    sourceTemplateId = body.templateId
+    prescription = await buildPrescription(ctx.db, body.templateId)
+  } else {
+    const sources = await ctx.db.sql<ProgramSessionRow>`
+      SELECT * FROM program_sessions
+      WHERE id = ${body.programSessionId!} AND program_id = ${programId}
+    `
+    if (!sources[0]) return error('Program workout not found', 404)
+    const source = mapProgramSession(sources[0])
+    sourceName = source.name
+    sourceTemplateId = null
+    prescription = source.prescription
+  }
+  const weeks = body.allWeeks === false ? [weekIndex] : Array.from({ length: program.week_count }, (_, i) => i)
+  const created: ProgramSession[] = []
+  for (const week of weeks) {
+    for (const weekday of weekdays) {
+      const [row] = await ctx.db.sql<ProgramSessionRow>`
+        INSERT INTO program_sessions (
+          program_id, template_id, name, week_index, weekday, prescription
+        ) VALUES (
+          ${programId},
+          ${sourceTemplateId},
+          ${programWorkoutName(sourceName, week, program.name)},
+          ${week},
+          ${weekday},
+          CAST(${JSON.stringify(prescription)} AS jsonb)
+        )
+        RETURNING *
+      `
+      created.push(mapProgramSession(row!))
+    }
+  }
+  await ctx.db.sql`UPDATE programs SET updated_at = NOW() WHERE id = ${programId}`
+  return json(created, 201)
+}
+
+export async function handleGetProgramSession(
+  ctx: AppContext,
+  programId: string,
+  sessionId: string,
+) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const program = await ownedProgram(ctx, programId)
+  if (!program) return error('Program not found', 404)
+  const rows = await ctx.db.sql<ProgramSessionRow>`
+    SELECT * FROM program_sessions
+    WHERE id = ${sessionId} AND program_id = ${programId}
+  `
+  if (!rows[0]) return error('Program workout not found', 404)
+  return json(mapProgramSession(rows[0]))
+}
+
+export async function handleUpdateProgramSession(
+  ctx: AppContext,
+  programId: string,
+  sessionId: string,
+  req: Request,
+) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const program = await ownedProgram(ctx, programId)
+  if (!program) return error('Program not found', 404)
+  const existing = await ctx.db.sql<ProgramSessionRow>`
+    SELECT * FROM program_sessions
+    WHERE id = ${sessionId} AND program_id = ${programId}
+  `
+  if (!existing[0]) return error('Program workout not found', 404)
+  const body = (await req.json()) as {
+    name?: string
+    prescription?: unknown
+    weekIndex?: number
+    weekday?: number
+  }
+  const name = body.name?.trim() || existing[0].name
+  const prescription = body.prescription
+    ? body.prescription
+    : existing[0].prescription
+  if (!validSessionPrescription(prescription)) return error('Workout details are invalid')
+  const weekIndex =
+    body.weekIndex == null ? existing[0].week_index : Number(body.weekIndex)
+  const weekday = body.weekday == null ? existing[0].weekday : Number(body.weekday)
+  if (
+    !Number.isInteger(weekIndex) ||
+    weekIndex < 0 ||
+    weekIndex >= program.week_count ||
+    !Number.isInteger(weekday) ||
+    weekday < 0 ||
+    weekday > 6
+  ) {
+    return error('Choose a valid day in this program')
+  }
+  const [row] = await ctx.db.sql<ProgramSessionRow>`
+    UPDATE program_sessions
+    SET name = ${name},
+        prescription = CAST(${JSON.stringify(prescription)} AS jsonb),
+        week_index = ${weekIndex},
+        weekday = ${weekday},
+        updated_at = NOW()
+    WHERE id = ${sessionId}
+    RETURNING *
+  `
+  await ctx.db.sql`UPDATE programs SET updated_at = NOW() WHERE id = ${programId}`
+  return json(mapProgramSession(row!))
+}
+
+export async function handleDeleteProgramSession(
+  ctx: AppContext,
+  programId: string,
+  sessionId: string,
+) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const program = await ownedProgram(ctx, programId)
+  if (!program) return error('Program not found', 404)
+  await ctx.db.sql`
+    DELETE FROM program_sessions
+    WHERE id = ${sessionId} AND program_id = ${programId}
+  `
+  await ctx.db.sql`UPDATE programs SET updated_at = NOW() WHERE id = ${programId}`
+  return json({ ok: true })
+}
+
+export async function handleAssignProgram(ctx: AppContext, programId: string, req: Request) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const program = await ownedProgram(ctx, programId)
+  if (!program) return error('Program not found', 404)
+  const body = (await req.json()) as { clientId?: string; startDate?: string }
+  if (!body.clientId || !body.startDate) return error('clientId and startDate are required')
+  const startMonday = mondayOf(body.startDate)
+  if (!startMonday) return error('startDate is invalid')
+  const clients = await ctx.db.sql<{ id: string }>`
+    SELECT id FROM clients
+    WHERE id = ${body.clientId} AND trainer_id = ${ctx.trainer!.id}
+  `
+  if (!clients[0]) return error('Client not found', 404)
+  const programSessions = await loadProgramSessions(ctx.db, programId)
+  const created = []
+  for (const item of programSessions) {
+    const scheduledDate = addUtcDays(startMonday, item.weekIndex * 7 + item.weekday)
+    const [row] = await ctx.db.sql<SessionRow>`
+      INSERT INTO sessions (
+        client_id, trainer_id, template_id, name, scheduled_date, prescription
+      ) VALUES (
+        ${body.clientId},
+        ${ctx.trainer!.id},
+        ${item.templateId},
+        ${item.name},
+        ${scheduledDate},
+        CAST(${JSON.stringify(item.prescription)} AS jsonb)
+      )
+      RETURNING *
+    `
+    created.push(mapSession(row!))
+  }
+  return json(created, 201)
+}
+
 export async function handleUpsertExercise(
   ctx: AppContext,
   templateId: string,
@@ -588,6 +1256,14 @@ export async function handleUpsertExercise(
     movementId?: string
   }
   if (!exerciseId && !body.movementId) return error('Movement is required')
+  if (body.movementId) {
+    const allowed = await ctx.db.sql<{ id: string }>`
+      SELECT id FROM movements
+      WHERE id = ${body.movementId}
+        AND (trainer_id IS NULL OR trainer_id = ${ctx.trainer!.id})
+    `
+    if (!allowed[0]) return error('Movement not found', 404)
+  }
 
   if (exerciseId) {
     await ctx.db.sql`
@@ -682,7 +1358,14 @@ export async function handleReorderExercises(
   `
   if (!owned[0]) return error('Template not found', 404)
 
-  const body = (await req.json()) as { exerciseIds?: string[] }
+  const body = (await req.json()) as {
+    exerciseIds?: string[]
+    supersetAssignments?: {
+      exerciseId: string
+      group: string | null
+      order: number | null
+    }[]
+  }
   const exerciseIds = body.exerciseIds ?? []
   const existing = await loadExercises(ctx.db, templateId)
   const existingIds = new Set(existing.map((ex) => ex.id))
@@ -694,12 +1377,71 @@ export async function handleReorderExercises(
     return error('Exercise order does not match this workout')
   }
 
+  const rawAssignments = body.supersetAssignments
+  let assignments:
+    | Map<string, { exerciseId: string; group: string | null; order: number | null }>
+    | undefined
+  if (rawAssignments) {
+    if (
+      rawAssignments.length !== existing.length ||
+      new Set(rawAssignments.map((assignment) => assignment.exerciseId)).size !==
+        rawAssignments.length ||
+      rawAssignments.some((assignment) => !existingIds.has(assignment.exerciseId))
+    ) {
+      return error('Superset assignments do not match this workout')
+    }
+
+    const normalized = rawAssignments.map((assignment) => ({
+      exerciseId: assignment.exerciseId,
+      group:
+        typeof assignment.group === 'string' && assignment.group.trim()
+          ? assignment.group.trim()
+          : null,
+      order: assignment.order,
+    }))
+    const groupedOrders = new Map<string, number[]>()
+    for (const assignment of normalized) {
+      if (
+        (assignment.group &&
+          (!Number.isInteger(assignment.order) || (assignment.order ?? 0) < 1)) ||
+        (!assignment.group && assignment.order != null)
+      ) {
+        return error('Invalid superset assignment')
+      }
+      if (assignment.group) {
+        const orders = groupedOrders.get(assignment.group) ?? []
+        orders.push(assignment.order!)
+        groupedOrders.set(assignment.group, orders)
+      }
+    }
+    for (const orders of groupedOrders.values()) {
+      orders.sort((a, b) => a - b)
+      if (orders.length < 2 || orders.some((order, index) => order !== index + 1)) {
+        return error('Supersets must contain at least two movements in order')
+      }
+    }
+    assignments = new Map(normalized.map((assignment) => [assignment.exerciseId, assignment]))
+  }
+
   for (let i = 0; i < exerciseIds.length; i++) {
-    await ctx.db.sql`
-      UPDATE template_exercises
-      SET sort_order = ${i}
-      WHERE id = ${exerciseIds[i]!} AND template_id = ${templateId}
-    `
+    const exerciseId = exerciseIds[i]!
+    const assignment = assignments?.get(exerciseId)
+    if (assignment) {
+      await ctx.db.sql`
+        UPDATE template_exercises
+        SET
+          sort_order = ${i},
+          superset_group = ${assignment.group},
+          superset_order = ${assignment.order}
+        WHERE id = ${exerciseId} AND template_id = ${templateId}
+      `
+    } else {
+      await ctx.db.sql`
+        UPDATE template_exercises
+        SET sort_order = ${i}
+        WHERE id = ${exerciseId} AND template_id = ${templateId}
+      `
+    }
   }
   await ctx.db.sql`UPDATE workout_templates SET updated_at = NOW() WHERE id = ${templateId}`
   const rows = await ctx.db.sql<TemplateRow>`

@@ -8,10 +8,14 @@ import { ClientHomePage } from './pages/ClientHomePage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { OnboardingPage } from './pages/OnboardingPage.tsx'
 import { ProfilePage } from './pages/ProfilePage.tsx'
+import { TrainerPublicProfilePage } from './pages/TrainerPublicProfilePage.tsx'
 import { SessionDetailPage } from './pages/SessionDetailPage.tsx'
 import { TemplateEditorPage } from './pages/TemplateEditorPage.tsx'
 import { TrainerHomePage } from './pages/TrainerHomePage.tsx'
 import { WorkoutListPage } from './pages/WorkoutListPage.tsx'
+import { ProgramListPage } from './pages/ProgramListPage.tsx'
+import { ProgramEditorPage } from './pages/ProgramEditorPage.tsx'
+import { ProgramSessionEditorPage } from './pages/ProgramSessionEditorPage.tsx'
 
 function Loading() {
   return <div className="flex min-h-svh items-center justify-center text-muted">Loading…</div>
@@ -34,6 +38,12 @@ function Home() {
 function TrainerOnly({ children }: { children: ReactNode }) {
   const { me } = useAuth()
   if (me?.user.role !== 'trainer') return <Navigate to="/" replace />
+  return children
+}
+
+function AssignedClientOnly({ children }: { children: ReactNode }) {
+  const { me } = useAuth()
+  if (me?.user.role !== 'client' || !me.client?.trainerId) return <Navigate to="/" replace />
   return children
 }
 
@@ -101,6 +111,14 @@ export default function App() {
       >
         <Route path="/" element={<Home />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route
+          path="/trainer"
+          element={
+            <AssignedClientOnly>
+              <TrainerPublicProfilePage />
+            </AssignedClientOnly>
+          }
+        />
         <Route path="/sessions/:id" element={<SessionDetailPage />} />
         <Route
           path="/workouts"
@@ -115,6 +133,30 @@ export default function App() {
           element={
             <TrainerOnly>
               <TemplateEditorPage />
+            </TrainerOnly>
+          }
+        />
+        <Route
+          path="/programs"
+          element={
+            <TrainerOnly>
+              <ProgramListPage />
+            </TrainerOnly>
+          }
+        />
+        <Route
+          path="/programs/:id"
+          element={
+            <TrainerOnly>
+              <ProgramEditorPage />
+            </TrainerOnly>
+          }
+        />
+        <Route
+          path="/programs/:id/sessions/:sessionId"
+          element={
+            <TrainerOnly>
+              <ProgramSessionEditorPage />
             </TrainerOnly>
           }
         />

@@ -3,17 +3,26 @@ import { error } from '../lib/http.ts'
 import {
   handleActivity,
   handleAdHoc,
+  handleAddProgramSessions,
+  handleAssignProgram,
   handleAssignSession,
   handleCreateMovement,
+  handleCreateProgram,
   handleCreateTemplate,
   handleDeleteExercise,
+  handleDeleteProgram,
+  handleDeleteProgramSession,
   handleDeleteSession,
   handleDeleteTemplate,
   handleDevReset,
   handleExerciseHistory,
+  handleGetAssignedTrainer,
   handleGetMe,
+  handleGetProgram,
+  handleGetProgramSession,
   handleGetSession,
   handleGetTemplate,
+  handleListPrograms,
   handleListSessions,
   handleListTemplates,
   handleLoggedMovements,
@@ -24,6 +33,9 @@ import {
   handleReorderExercises,
   handleTrainerClients,
   handleTrainerLookup,
+  handleUpdateProfile,
+  handleUpdateProgram,
+  handleUpdateProgramSession,
   handleUpdateSession,
   handleUpdateTemplate,
   handleUpsertExercise,
@@ -43,7 +55,7 @@ export default async (req: Request) => {
     if (path === '/api/movements' && req.method === 'GET') {
       const loaded = await loadContext(req)
       if (!loaded.ok) return loaded.response
-      return await handleMovements(req)
+      return await handleMovements(loaded.ctx, req)
     }
     if (path === '/api/movements' && req.method === 'POST') {
       const loaded = await loadContext(req)
@@ -60,6 +72,10 @@ export default async (req: Request) => {
     }
 
     if (path === '/api/me' && req.method === 'GET') return await handleGetMe(ctx)
+    if (path === '/api/me' && req.method === 'PUT') return await handleUpdateProfile(ctx, req)
+    if (path === '/api/trainer' && req.method === 'GET') {
+      return await handleGetAssignedTrainer(ctx)
+    }
     if (path === '/api/onboarding' && req.method === 'POST') {
       return await handleOnboarding(ctx, req)
     }
@@ -99,6 +115,41 @@ export default async (req: Request) => {
       if (req.method === 'GET') return await handleGetTemplate(ctx, id)
       if (req.method === 'PUT') return await handleUpdateTemplate(ctx, id, req)
       if (req.method === 'DELETE') return await handleDeleteTemplate(ctx, id)
+    }
+
+    if (path === '/api/programs' && req.method === 'GET') {
+      return await handleListPrograms(ctx)
+    }
+    if (path === '/api/programs' && req.method === 'POST') {
+      return await handleCreateProgram(ctx, req)
+    }
+    const programAssign = path.match(/^\/api\/programs\/([^/]+)\/assign$/)
+    if (programAssign && req.method === 'POST') {
+      return await handleAssignProgram(ctx, programAssign[1]!, req)
+    }
+    const programSessionMatch = path.match(/^\/api\/programs\/([^/]+)\/sessions(?:\/([^/]+))?$/)
+    if (programSessionMatch) {
+      const programId = programSessionMatch[1]!
+      const sessionId = programSessionMatch[2]
+      if (req.method === 'POST' && !sessionId) {
+        return await handleAddProgramSessions(ctx, programId, req)
+      }
+      if (sessionId && req.method === 'GET') {
+        return await handleGetProgramSession(ctx, programId, sessionId)
+      }
+      if (sessionId && req.method === 'PUT') {
+        return await handleUpdateProgramSession(ctx, programId, sessionId, req)
+      }
+      if (sessionId && req.method === 'DELETE') {
+        return await handleDeleteProgramSession(ctx, programId, sessionId)
+      }
+    }
+    const programMatch = path.match(/^\/api\/programs\/([^/]+)$/)
+    if (programMatch) {
+      const id = programMatch[1]!
+      if (req.method === 'GET') return await handleGetProgram(ctx, id)
+      if (req.method === 'PUT') return await handleUpdateProgram(ctx, id, req)
+      if (req.method === 'DELETE') return await handleDeleteProgram(ctx, id)
     }
 
     if (path === '/api/clients' && req.method === 'GET') {

@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { AddMovementSlot } from './AddMovementSlot.tsx'
 import { Button, Card, Field, NumericTextInput, Select, TextArea, TextInput } from './ui.tsx'
 import {
   ModeToggle,
@@ -7,15 +8,18 @@ import {
 } from './WorkoutEditorControls.tsx'
 import {
   CATEGORIES,
+  EQUIPMENT,
   METHODS,
   allowsPerRepTempo,
   fallbackSetPrescription,
+  movementDefaults,
   quantityLabel,
   resizeSetPrescriptions,
   resizeTempoPerRep,
   showsRepsField,
   tempoRepCount,
 } from './WorkoutEditorUtils.ts'
+import { api } from '../lib/api.ts'
 import type {
   Equipment,
   ExerciseCategory,
@@ -27,22 +31,13 @@ import type {
   TempoMode,
 } from '../../shared/types.ts'
 
-const EQUIPMENT: { value: Equipment; label: string }[] = [
-  { value: 'barbell', label: 'Barbell' },
-  { value: 'dumbbell', label: 'Dumbbell' },
-  { value: 'machine', label: 'Machine' },
-  { value: 'cable', label: 'Cable' },
-  { value: 'kettlebell', label: 'Kettlebell' },
-  { value: 'bodyweight', label: 'Bodyweight' },
-  { value: 'other', label: 'Other' },
-]
-
 function newExercise(movement: Movement): PrescribedExercise {
+  const defaults = movementDefaults(movement)
   return {
     movementId: movement.id,
     movementName: movement.name,
-    variantId: movement.variants[0]?.id ?? null,
-    equipment: movement.variants[0]?.equipment ?? null,
+    variantId: defaults.variantId,
+    equipment: defaults.equipment,
     setCount: 3,
     repsMin: 8,
     repsMax: null,
@@ -50,13 +45,13 @@ function newExercise(movement: Movement): PrescribedExercise {
     setPrescriptions: [],
     method: 'straight',
     methodTarget: null,
-    category: 'accessory',
+    category: defaults.category,
     loadPrescription: null,
     tempo: {},
     tempoMode: 'default',
     tempoPerRep: [],
     restAfterSetSeconds: 90,
-    restAfterExerciseSeconds: 120,
+    restAfterExerciseSeconds: 90,
     supersetGroup: null,
     supersetOrder: null,
     notes: null,
@@ -75,11 +70,16 @@ export function SessionPrescriptionEditor({
   movements: Movement[]
   onChange: (next: { name: string; prescription: Prescription }) => void
 }) {
-  const [movementId, setMovementId] = useState('')
+  const [openSlot, setOpenSlot] = useState<string | null>(null)
+  const [catalog, setCatalog] = useState(movements)
   const sortedMovements = useMemo(
-    () => [...movements].sort((a, b) => a.name.localeCompare(b.name)),
-    [movements],
+    () => [...catalog].sort((a, b) => a.name.localeCompare(b.name)),
+    [catalog],
   )
+
+  useEffect(() => {
+    setCatalog(movements)
+  }, [movements])
 
   const setPrescription = (next: Prescription) => onChange({ name, prescription: next })
   const patchExercise = (index: number, patch: Partial<PrescribedExercise>) => {
@@ -97,6 +97,45 @@ export function SessionPrescriptionEditor({
     exercises[target] = moving
     setPrescription({ ...prescription, exercises })
   }
+  const insertExercise = (index: number, movement: Movement) => {
+    const exercises = [...prescription.exercises]
+    exercises.splice(index, 0, newExercise(movement))
+    setPrescription({ ...prescription, exercises })
+    setOpenSlot(null)
+  }
+  const rememberMovement = (movement: Movement) => {
+    setCatalog((prev) => {
+      if (prev.some((item) => item.id === movement.id)) return prev
+      return [...prev, movement]
+    })
+  }
+  const createAndInsert = async (
+    index: number,
+    name: string,
+    category: ExerciseCategory,
+    equipment: Equipment,
+  ) => {
+    const movement = await api<Movement>('/api/movements', {
+      method: 'POST',
+      body: JSON.stringify({ name, category, equipment }),
+    })
+    rememberMovement(movement)
+    insertExercise(index, movement)
+  }
+  const renderSlot = (key: string, index: number, label: string) => (
+    <AddMovementSlot
+      key={key}
+      label={label}
+      movements={sortedMovements}
+      open={openSlot === key}
+      onOpen={() => setOpenSlot(key)}
+      onCancel={() => setOpenSlot(null)}
+      onSelect={(movement) => insertExercise(index, movement)}
+      onCreate={(name, category, equipment) =>
+        void createAndInsert(index, name, category, equipment)
+      }
+    />
+  )
 
   return (
     <div className="space-y-4">
@@ -107,7 +146,7 @@ export function SessionPrescriptionEditor({
             onChange={(event) => onChange({ name: event.target.value, prescription })}
           />
         </Field>
-        <Field label="Custom warmup">
+        <Field label="Workout / Warmup Notes">
           <TextArea
             rows={3}
             value={prescription.warmup}
@@ -118,52 +157,37 @@ export function SessionPrescriptionEditor({
         </Field>
       </Card>
 
-      {prescription.exercises.map((exercise, index) => (
-        <SessionExerciseEditor
-          key={`${exercise.movementId}-${index}`}
-          exercise={exercise}
-          index={index}
-          count={prescription.exercises.length}
-          onPatch={(patch) => patchExercise(index, patch)}
-          onMove={(direction) => moveExercise(index, direction)}
-          onRemove={() =>
-            setPrescription({
-              ...prescription,
-              exercises: prescription.exercises.filter((_, i) => i !== index),
-            })
-          }
-        />
-      ))}
-
-      <Card className="space-y-3">
-        <h2 className="font-semibold">Add movement</h2>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Select value={movementId} onChange={(event) => setMovementId(event.target.value)}>
-            <option value="">Choose a movement…</option>
-            {sortedMovements.map((movement) => (
-              <option key={movement.id} value={movement.id}>
-                {movement.name}
-              </option>
-            ))}
-          </Select>
-          <Button
-            type="button"
-            className="shrink-0"
-            disabled={!movementId}
-            onClick={() => {
-              const movement = movements.find((item) => item.id === movementId)
-              if (!movement) return
-              setPrescription({
-                ...prescription,
-                exercises: [...prescription.exercises, newExercise(movement)],
-              })
-              setMovementId('')
-            }}
-          >
-            Add movement
-          </Button>
-        </div>
-      </Card>
+      <div className="space-y-4">
+        <p className="text-sm text-muted">
+          Use the plus buttons to add a movement in that spot. Use Move up and Move down to change
+          order.
+        </p>
+        {renderSlot('start', 0, 'Add movement at the start')}
+        {prescription.exercises.map((exercise, index) => (
+          <div key={`${exercise.movementId}-${index}`} className="space-y-4">
+            <SessionExerciseEditor
+              exercise={exercise}
+              index={index}
+              count={prescription.exercises.length}
+              onPatch={(patch) => patchExercise(index, patch)}
+              onMove={(direction) => moveExercise(index, direction)}
+              onRemove={() =>
+                setPrescription({
+                  ...prescription,
+                  exercises: prescription.exercises.filter((_, i) => i !== index),
+                })
+              }
+            />
+            {renderSlot(
+              `after-${index}`,
+              index + 1,
+              index === prescription.exercises.length - 1
+                ? 'Add movement at the end'
+                : 'Add movement here',
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -242,6 +266,25 @@ function SessionExerciseEditor({
     onPatch({ setPrescriptions: sets })
   }
 
+  const equipmentUnset = !ex.equipment
+  const equipmentField = (
+    <Field label={equipmentUnset ? 'Equipment' : 'Equipment override'}>
+      <Select
+        value={ex.equipment ?? ''}
+        onChange={(event) =>
+          onPatch({ equipment: (event.target.value || null) as Equipment | null })
+        }
+      >
+        <option value="">—</option>
+        {EQUIPMENT.map((equipment) => (
+          <option key={equipment.value} value={equipment.value}>
+            {equipment.label}
+          </option>
+        ))}
+      </Select>
+    </Field>
+  )
+
   return (
     <Card className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -299,6 +342,7 @@ function SessionExerciseEditor({
           </Select>
         </Field>
       </div>
+      {equipmentUnset ? equipmentField : null}
 
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Sets">
@@ -480,21 +524,7 @@ function SessionExerciseEditor({
         </Field>
       </div>
 
-      <Field label="Equipment override">
-        <Select
-          value={ex.equipment ?? ''}
-          onChange={(event) =>
-            onPatch({ equipment: (event.target.value || null) as Equipment | null })
-          }
-        >
-          <option value="">—</option>
-          {EQUIPMENT.map((equipment) => (
-            <option key={equipment.value} value={equipment.value}>
-              {equipment.label}
-            </option>
-          ))}
-        </Select>
-      </Field>
+      {equipmentUnset ? null : equipmentField}
       <Field label="YouTube link">
         <TextInput
           value={ex.youtubeUrl ?? ''}

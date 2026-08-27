@@ -23,6 +23,7 @@ import type {
   WorkoutTemplate,
 } from '../../shared/types.ts'
 import { warmupToText } from '../../shared/types.ts'
+import { AddMovementSlot } from '../components/AddMovementSlot.tsx'
 import {
   PrescribedExerciseCard,
   RestAfterMovement,
@@ -37,7 +38,9 @@ import {
 } from '../components/WorkoutEditorControls.tsx'
 import {
   CATEGORIES,
+  EQUIPMENT,
   METHODS,
+  movementDefaults,
   allowsPerRepTempo,
   fallbackSetPrescription,
   quantityLabel,
@@ -48,25 +51,26 @@ import {
 } from '../components/WorkoutEditorUtils.ts'
 
 function emptyExercise(movement: Movement): Partial<TemplateExercise> {
+  const defaults = movementDefaults(movement)
   return {
     movementId: movement.id,
     movementName: movement.name,
-    variantId: movement.variants[0]?.id ?? null,
-    equipment: movement.variants[0]?.equipment ?? null,
+    variantId: defaults.variantId,
+    equipment: defaults.equipment,
     setCount: 3,
     repsMin: 8,
     repsMax: null,
     perSetEnabled: false,
     setPrescriptions: [],
     method: 'straight',
-    category: 'accessory',
+    category: defaults.category,
     loadPrescription: null,
     tempoMode: 'default',
     tempoPerRep: [],
     supersetGroup: null,
     supersetOrder: null,
     restAfterSetSeconds: 90,
-    restAfterExerciseSeconds: 120,
+    restAfterExerciseSeconds: 90,
     youtubeUrl: movement.youtubeUrl,
   }
 }
@@ -158,7 +162,201 @@ function toPrescribed(ex: TemplateExercise): PrescribedExercise {
 }
 
 type InsertSlot = { key: string; flatIndex: number; group: string | null }
-type EditorView = 'edit' | 'preview'
+type EditorView = 'compact' | 'edit' | 'preview'
+type ExerciseDropTarget =
+  | { kind: 'line'; index: number }
+  | { kind: 'row'; exerciseId: string }
+
+function normalizeSupersets(exercises: TemplateExercise[]) {
+  const groupCounts = new Map<string, number>()
+  for (const exercise of exercises) {
+    const group = supersetGroupKey(exercise)
+    if (group) groupCounts.set(group, (groupCounts.get(group) ?? 0) + 1)
+  }
+
+  const groupOrders = new Map<string, number>()
+  return exercises.map((exercise, sortOrder) => {
+    const group = supersetGroupKey(exercise)
+    if (!group || (groupCounts.get(group) ?? 0) < 2) {
+      return { ...exercise, sortOrder, supersetGroup: null, supersetOrder: null }
+    }
+    const order = (groupOrders.get(group) ?? 0) + 1
+    groupOrders.set(group, order)
+    return { ...exercise, sortOrder, supersetGroup: group, supersetOrder: order }
+  })
+}
+
+function moveExercisesToLine(
+  exercises: TemplateExercise[],
+  movingIds: string[],
+  lineIndex: number,
+) {
+  const movingSet = new Set(movingIds)
+  const moving = movingIds
+    .map((id) => exercises.find((exercise) => exercise.id === id))
+    .filter((exercise): exercise is TemplateExercise => Boolean(exercise))
+  const removedBeforeLine = exercises
+    .slice(0, lineIndex)
+    .filter((exercise) => movingSet.has(exercise.id)).length
+  const remaining = exercises.filter((exercise) => !movingSet.has(exercise.id))
+  const insertionIndex = Math.max(
+    0,
+    Math.min(remaining.length, lineIndex - removedBeforeLine),
+  )
+  remaining.splice(insertionIndex, 0, ...moving)
+  return remaining
+}
+
+function moveExercisesAfter(
+  exercises: TemplateExercise[],
+  movingIds: string[],
+  targetId: string,
+) {
+  const movingSet = new Set(movingIds)
+  const moving = movingIds
+    .map((id) => exercises.find((exercise) => exercise.id === id))
+    .filter((exercise): exercise is TemplateExercise => Boolean(exercise))
+  const remaining = exercises.filter((exercise) => !movingSet.has(exercise.id))
+  const targetIndex = remaining.findIndex((exercise) => exercise.id === targetId)
+  if (targetIndex === -1) return exercises
+  remaining.splice(targetIndex + 1, 0, ...moving)
+  return remaining
+}
+
+function arrangeExerciseDrop(
+  exercises: TemplateExercise[],
+  draggedId: string,
+  target: ExerciseDropTarget,
+  newGroup: string,
+) {
+  const dragged = exercises.find((exercise) => exercise.id === draggedId)
+  if (!dragged) return exercises
+  if (target.kind === 'row' && target.exerciseId === draggedId) return exercises
+
+  const sourceGroup = supersetGroupKey(dragged)
+  const sourceMembers = sourceGroup
+    ? exercises.filter((exercise) => supersetGroupKey(exercise) === sourceGroup)
+    : [dragged]
+  const sourceIsFirst = Boolean(sourceGroup && sourceMembers[0]?.id === draggedId)
+
+  let moving = sourceIsFirst ? sourceMembers : [dragged]
+  let arranged = exercises.map((exercise) => ({ ...exercise }))
+
+  if (target.kind === 'line') {
+    const leftGroup =
+      target.index > 0 ? supersetGroupKey(exercises[target.index - 1]!) : null
+    const rightGroup =
+      target.index < exercises.length ? supersetGroupKey(exercises[target.index]!) : null
+    const targetGroup = leftGroup && leftGroup === rightGroup ? leftGroup : null
+
+    if (targetGroup === sourceGroup) {
+      moving = [dragged]
+    } else if (targetGroup) {
+      const movingIds = new Set(moving.map((exercise) => exercise.id))
+      arranged = arranged.map((exercise) =>
+        movingIds.has(exercise.id) ? { ...exercise, supersetGroup: targetGroup } : exercise,
+      )
+    } else if (!sourceIsFirst) {
+      arranged = arranged.map((exercise) =>
+        exercise.id === draggedId
+          ? { ...exercise, supersetGroup: null, supersetOrder: null }
+          : exercise,
+      )
+    }
+
+    arranged = moveExercisesToLine(
+      arranged,
+      moving.map((exercise) => exercise.id),
+      target.index,
+    )
+    return normalizeSupersets(arranged)
+  }
+
+  const targetExercise = exercises.find((exercise) => exercise.id === target.exerciseId)
+  if (!targetExercise) return exercises
+  const targetGroup = supersetGroupKey(targetExercise)
+
+  if (targetGroup === sourceGroup && sourceGroup) {
+    moving = [dragged]
+    arranged = moveExercisesAfter(arranged, [draggedId], target.exerciseId)
+    return normalizeSupersets(arranged)
+  }
+
+  const destinationGroup = targetGroup ?? newGroup
+  const movingIds = new Set(moving.map((exercise) => exercise.id))
+  arranged = arranged.map((exercise) => {
+    if (exercise.id === target.exerciseId || movingIds.has(exercise.id)) {
+      return { ...exercise, supersetGroup: destinationGroup }
+    }
+    return exercise
+  })
+  arranged = moveExercisesAfter(
+    arranged,
+    moving.map((exercise) => exercise.id),
+    target.exerciseId,
+  )
+  return normalizeSupersets(arranged)
+}
+
+function formatTempoPart(value: number | null | undefined) {
+  return value == null ? '–' : String(value)
+}
+
+function defaultTempoParts(ex: TemplateExercise) {
+  return [ex.tempoEccentric, ex.tempoPauseBottom, ex.tempoConcentric, ex.tempoPauseTop]
+}
+
+function hasConfiguredTempo(ex: TemplateExercise) {
+  if (ex.tempoMode === 'per_rep') return true
+  return defaultTempoParts(ex).some((part) => part != null)
+}
+
+function tempoSummary(ex: TemplateExercise) {
+  if (ex.tempoMode === 'per_rep') return 'Per rep'
+  const parts = defaultTempoParts(ex)
+  if (parts.every((part) => part == null)) return 'Default'
+  return parts.map(formatTempoPart).join('-')
+}
+
+function repsSummary(ex: TemplateExercise) {
+  if (!showsRepsField(ex.method)) {
+    return METHODS.find((method) => method.value === ex.method)?.label ?? ex.method
+  }
+  if (ex.perSetEnabled) {
+    const sets = resizeSetPrescriptions(
+      ex.setPrescriptions,
+      ex.setCount,
+      fallbackSetPrescription(ex),
+    )
+    const targets = sets.map((set) =>
+      set.repsMax != null && set.repsMax !== set.repsMin
+        ? `${set.repsMin}-${set.repsMax}`
+        : String(set.repsMin),
+    )
+    return new Set(targets).size === 1
+      ? `${ex.setCount} × ${targets[0] ?? '–'}`
+      : `${ex.setCount} custom sets`
+  }
+  const reps =
+    ex.repsMax != null && ex.repsMax !== ex.repsMin
+      ? `${ex.repsMin}-${ex.repsMax}`
+      : String(ex.repsMin)
+  return `${ex.setCount} × ${reps}`
+}
+
+function loadSummary(ex: TemplateExercise) {
+  if (!ex.perSetEnabled) return ex.loadPrescription ?? ''
+  const loads = resizeSetPrescriptions(
+    ex.setPrescriptions,
+    ex.setCount,
+    fallbackSetPrescription(ex),
+  )
+    .map((set) => set.loadPrescription?.trim())
+    .filter((load): load is string => Boolean(load))
+  if (loads.length === 0) return ''
+  if (new Set(loads).size === 1) return loads[0]!
+  return 'Custom sets'
+}
 
 export function TemplateEditorPage() {
   const { id } = useParams()
@@ -166,6 +364,9 @@ export function TemplateEditorPage() {
   const [movements, setMovements] = useState<Movement[]>([])
   const [openSlot, setOpenSlot] = useState<string | null>(null)
   const [view, setView] = useState<EditorView>('edit')
+  const [expandedExerciseId, setExpandedExerciseId] = useState<string | null>(null)
+  const [draggedExerciseId, setDraggedExerciseId] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<ExerciseDropTarget | null>(null)
   const [saving, setSaving] = useState(false)
 
   const load = async () => {
@@ -184,6 +385,7 @@ export function TemplateEditorPage() {
 
   const exercises = useMemo(() => template?.exercises ?? [], [template])
   const blocks = useMemo(() => exerciseBlocks(exercises), [exercises])
+  const visibleExercises = useMemo(() => blocks.flat(), [blocks])
   const nextGroup = useMemo(() => nextSupersetGroup(exercises), [exercises])
   const existingGroups = useMemo(() => {
     const list: string[] = []
@@ -297,10 +499,15 @@ export function TemplateEditorPage() {
     }
   }
 
-  const createAndAdd = async (name: string, slot: InsertSlot) => {
+  const createAndAdd = async (
+    name: string,
+    category: ExerciseCategory,
+    equipment: Equipment,
+    slot: InsertSlot,
+  ) => {
     const movement = await api<Movement>('/api/movements', {
       method: 'POST',
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, category, equipment }),
     })
     setMovements((prev) => {
       if (prev.some((item) => item.id === movement.id)) return prev
@@ -336,14 +543,13 @@ export function TemplateEditorPage() {
     await load()
   }
 
-  const moveBlock = async (blockIndex: number, direction: -1 | 1) => {
+  const moveBlockTo = async (blockIndex: number, target: number) => {
     if (!id || !template) return
-    const target = blockIndex + direction
-    if (target < 0 || target >= blocks.length) return
+    if (target < 0 || target >= blocks.length || target === blockIndex) return
     const nextBlocks = [...blocks]
-    const moving = nextBlocks[blockIndex]!
-    nextBlocks[blockIndex] = nextBlocks[target]!
-    nextBlocks[target] = moving
+    const [moving] = nextBlocks.splice(blockIndex, 1)
+    if (!moving) return
+    nextBlocks.splice(target, 0, moving)
     const exerciseIds = nextBlocks.flat().map((ex) => ex.id)
     setSaving(true)
     try {
@@ -357,6 +563,53 @@ export function TemplateEditorPage() {
     }
   }
 
+  const moveBlock = (blockIndex: number, direction: -1 | 1) =>
+    moveBlockTo(blockIndex, blockIndex + direction)
+
+  const saveExerciseArrangement = async (nextExercises: TemplateExercise[]) => {
+    if (!id || !template) return
+    const unchanged = nextExercises.every((exercise, index) => {
+      const current = visibleExercises[index]
+      return (
+        current?.id === exercise.id &&
+        supersetGroupKey(current) === supersetGroupKey(exercise) &&
+        current.supersetOrder === exercise.supersetOrder
+      )
+    })
+    if (unchanged) return
+
+    setSaving(true)
+    try {
+      const updated = await api<WorkoutTemplate>(`/api/templates/${id}/exercises/reorder`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          exerciseIds: nextExercises.map((exercise) => exercise.id),
+          supersetAssignments: nextExercises.map((exercise) => ({
+            exerciseId: exercise.id,
+            group: exercise.supersetGroup,
+            order: exercise.supersetOrder,
+          })),
+        }),
+      })
+      setTemplate(updated)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const finishExerciseDrop = (target: ExerciseDropTarget) => {
+    if (!draggedExerciseId) return
+    const nextExercises = arrangeExerciseDrop(
+      visibleExercises,
+      draggedExerciseId,
+      target,
+      nextGroup,
+    )
+    void saveExerciseArrangement(nextExercises)
+    setDraggedExerciseId(null)
+    setDropTarget(null)
+  }
+
   const renderSlot = (slot: InsertSlot, label: string) => (
     <AddMovementSlot
       key={slot.key}
@@ -366,7 +619,9 @@ export function TemplateEditorPage() {
       onOpen={() => setOpenSlot(slot.key)}
       onCancel={() => setOpenSlot(null)}
       onSelect={(movement) => void addExerciseAt(movement, slot)}
-      onCreate={(name) => void createAndAdd(name, slot)}
+      onCreate={(name, category, equipment) =>
+        void createAndAdd(name, category, equipment, slot)
+      }
     />
   )
 
@@ -376,21 +631,22 @@ export function TemplateEditorPage() {
 
   const header = (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-      {view === 'edit' ? (
+      {view === 'preview' ? (
+        <h1 className="min-w-0 flex-1 font-display text-2xl font-bold">{template.name}</h1>
+      ) : (
         <TextInput
           value={template.name}
           onChange={(e) => setTemplate({ ...template, name: e.target.value })}
           onBlur={() => void saveMeta({ name: template.name })}
           className="min-w-0 flex-1 font-display text-2xl font-bold"
         />
-      ) : (
-        <h1 className="min-w-0 flex-1 font-display text-2xl font-bold">{template.name}</h1>
       )}
       <div className="flex flex-wrap items-center justify-between gap-3 sm:shrink-0 sm:justify-start">
         <ModeToggle
           value={view}
           options={[
             { value: 'edit' as const, label: 'Edit' },
+            { value: 'compact' as const, label: 'Table' },
             { value: 'preview' as const, label: 'Client view' },
           ]}
           onChange={setView}
@@ -476,12 +732,327 @@ export function TemplateEditorPage() {
     )
   }
 
+  if (view === 'compact') {
+    const previewExercises =
+      draggedExerciseId && dropTarget?.kind === 'row'
+        ? arrangeExerciseDrop(visibleExercises, draggedExerciseId, dropTarget, nextGroup)
+        : null
+    const previewById = new Map(previewExercises?.map((exercise) => [exercise.id, exercise]))
+    const previewTarget =
+      dropTarget?.kind === 'row' ? previewById.get(dropTarget.exerciseId) : null
+    const previewGroup = previewTarget ? supersetGroupKey(previewTarget) : null
+
+    const renderDropLine = (index: number) => {
+      const active = dropTarget?.kind === 'line' && dropTarget.index === index
+      return (
+        <tr key={`drop-line-${index}`} className="h-2">
+          <td
+            colSpan={8}
+            className="p-0"
+            onDragOver={(event) => {
+              if (!draggedExerciseId) return
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+              setDropTarget({ kind: 'line', index })
+            }}
+            onDrop={(event) => {
+              event.preventDefault()
+              finishExerciseDrop({ kind: 'line', index })
+            }}
+          >
+            <div className="flex h-2 items-center px-2">
+              <div
+                className={`w-full transition-colors ${
+                  active ? 'h-0.5 bg-lime' : 'h-px bg-line'
+                }`}
+              />
+            </div>
+          </td>
+        </tr>
+      )
+    }
+
+    return (
+      <div className="mx-auto max-w-[90rem] space-y-5 py-6">
+        <div className="mx-auto w-full max-w-5xl space-y-5 px-4 sm:px-6">
+          {header}
+
+          <Card className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="font-semibold">Workout / Warmup Notes</h2>
+              <span className="text-xs text-muted">Workout-level notes</span>
+            </div>
+            <TextArea
+              rows={3}
+              value={warmup}
+              onChange={(e) => setTemplate({ ...template, warmup: e.target.value })}
+              onBlur={() => void saveMeta({ warmup })}
+            />
+          </Card>
+        </div>
+
+        <div className="mx-4 overflow-hidden rounded-2xl border border-line bg-panel sm:mx-6">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[72rem] border-collapse text-left text-sm">
+              <thead className="bg-ink text-xs uppercase tracking-wide text-muted">
+                <tr>
+                  <th className="w-28 px-3 py-3 font-medium">Block</th>
+                  <th className="min-w-56 px-3 py-3 font-medium">Movement</th>
+                  <th className="w-36 px-3 py-3 font-medium">Summary</th>
+                  <th className="w-44 px-3 py-3 font-medium">Load (lb)</th>
+                  <th className="w-32 px-3 py-3 font-medium">Tempo</th>
+                  <th className="w-28 px-3 py-3 font-medium">Rest (s)</th>
+                  <th className="min-w-56 px-3 py-3 font-medium">Notes</th>
+                  <th className="w-24 px-3 py-3 font-medium">
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {blocks.map((block, blockIndex) => {
+                  const group = supersetGroupKey(block[0]!)
+                  const blockStart = blocks
+                    .slice(0, blockIndex)
+                    .reduce((sum, item) => sum + item.length, 0)
+
+                  return block.map((ex, offset) => {
+                    const expanded = expandedExerciseId === ex.id
+                    const category =
+                      CATEGORIES.find((item) => item.value === ex.category)?.label ?? 'Accessory'
+                    const rowTargeted =
+                      dropTarget?.kind === 'row' && dropTarget.exerciseId === ex.id
+                    const previewExercise = previewById.get(ex.id)
+                    const previewed =
+                      Boolean(previewGroup) &&
+                      supersetGroupKey(previewExercise ?? ex) === previewGroup
+                    const displayGroup = previewed
+                      ? supersetGroupKey(previewExercise!)
+                      : group
+                    const displayOrder = previewed
+                      ? previewExercise!.supersetOrder
+                      : ex.supersetOrder
+                    return (
+                      <Fragment key={ex.id}>
+                        {renderDropLine(blockStart + offset)}
+                        <tr
+                          className={`align-middle hover:bg-ink/40 ${
+                            rowTargeted ? 'bg-lime/5 outline outline-1 -outline-offset-1 outline-lime' : ''
+                          } ${draggedExerciseId === ex.id ? 'opacity-50' : ''}`}
+                          onDragOver={(event) => {
+                            if (!draggedExerciseId || draggedExerciseId === ex.id) return
+                            event.preventDefault()
+                            event.dataTransfer.dropEffect = 'move'
+                            setDropTarget({ kind: 'row', exerciseId: ex.id })
+                          }}
+                          onDragLeave={(event) => {
+                            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                              setDropTarget((current) =>
+                                current?.kind === 'row' && current.exerciseId === ex.id
+                                  ? null
+                                  : current,
+                              )
+                            }
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault()
+                            finishExerciseDrop({ kind: 'row', exerciseId: ex.id })
+                          }}
+                        >
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                draggable={!saving}
+                                className="cursor-grab select-none rounded-lg px-2 py-2 text-base leading-none text-muted hover:bg-panel hover:text-white active:cursor-grabbing"
+                                aria-label={`Drag ${ex.movementName}`}
+                                title="Drag movement to reorder or create a superset"
+                                onDragStart={(event) => {
+                                  event.dataTransfer.effectAllowed = 'move'
+                                  event.dataTransfer.setData('text/plain', ex.id)
+                                  setDraggedExerciseId(ex.id)
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+                                  event.preventDefault()
+                                  const direction = event.key === 'ArrowUp' ? -1 : 1
+                                  void moveBlock(blockIndex, direction)
+                                }}
+                                onDragEnd={() => {
+                                  setDraggedExerciseId(null)
+                                  setDropTarget(null)
+                                }}
+                              >
+                                ⋮⋮
+                              </button>
+                              <span className={`font-medium ${previewed ? 'text-lime' : ''}`}>
+                                {displayGroup
+                                  ? `${displayGroup}${displayOrder ?? offset + 1}`
+                                  : blockIndex + 1}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2">
+                            <p className="font-semibold">{ex.movementName}</p>
+                            <p className="text-xs text-muted">
+                              {category}
+                              {ex.equipment ? ` · ${ex.equipment}` : ''}
+                            </p>
+                          </td>
+                          <td className="px-3 py-2">
+                            <button
+                              type="button"
+                              className="rounded-lg px-2 py-1 font-medium hover:bg-panel"
+                              onClick={() => setExpandedExerciseId(expanded ? null : ex.id)}
+                            >
+                              {repsSummary(ex)}
+                            </button>
+                          </td>
+                          <td className="px-3 py-2">
+                            {ex.perSetEnabled ? (
+                              <button
+                                type="button"
+                                className="w-full rounded-lg border border-transparent px-2 py-2 text-left text-muted hover:border-line"
+                                onClick={() => setExpandedExerciseId(ex.id)}
+                              >
+                                {loadSummary(ex) || 'Set-specific'}
+                              </button>
+                            ) : (
+                              <TextInput
+                                value={ex.loadPrescription ?? ''}
+                                placeholder="—"
+                                onChange={(e) =>
+                                  patchExercise(ex.id, {
+                                    loadPrescription: e.target.value || null,
+                                  })
+                                }
+                                onBlur={(e) =>
+                                  patchExercise(
+                                    ex.id,
+                                    { loadPrescription: e.target.value || null },
+                                    true,
+                                  )
+                                }
+                              />
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            <button
+                              type="button"
+                              className="w-full rounded-lg border border-transparent px-2 py-2 text-left hover:border-line"
+                              onClick={() => setExpandedExerciseId(expanded ? null : ex.id)}
+                            >
+                              {tempoSummary(ex)}
+                            </button>
+                          </td>
+                          <td className="px-3 py-2">
+                            <NumericTextInput
+                              value={ex.restAfterSetSeconds ?? ''}
+                              placeholder="—"
+                              onChange={(e) =>
+                                patchExercise(ex.id, {
+                                  restAfterSetSeconds: e.target.value
+                                    ? Number(e.target.value)
+                                    : null,
+                                })
+                              }
+                              onBlur={(e) =>
+                                patchExercise(
+                                  ex.id,
+                                  {
+                                    restAfterSetSeconds: e.target.value
+                                      ? Number(e.target.value)
+                                      : null,
+                                  },
+                                  true,
+                                )
+                              }
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <TextInput
+                              value={ex.notes ?? ''}
+                              placeholder="Add notes"
+                              onChange={(e) =>
+                                patchExercise(ex.id, { notes: e.target.value || null })
+                              }
+                              onBlur={(e) =>
+                                patchExercise(
+                                  ex.id,
+                                  { notes: e.target.value || null },
+                                  true,
+                                )
+                              }
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="text-xs"
+                                aria-expanded={expanded}
+                                onClick={() => setExpandedExerciseId(expanded ? null : ex.id)}
+                              >
+                                {expanded ? 'Close' : 'Details'}
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                        {expanded ? (
+                          <tr className="border-t border-line bg-ink/25">
+                            <td colSpan={8} className="p-3 sm:p-4">
+                              <ExerciseCard
+                                exercise={ex}
+                                index={blockStart + offset}
+                                nextGroup={nextGroup}
+                                existingGroups={existingGroups}
+                                reorderControls={null}
+                                onPatch={patchExercise}
+                                onAssignSuperset={(groupName) =>
+                                  void assignSuperset(ex.id, groupName)
+                                }
+                                onRemove={() => void removeExercise(ex.id)}
+                              />
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    )
+                  })
+                })}
+                {exercises.length > 0 ? renderDropLine(visibleExercises.length) : null}
+                {exercises.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-10 text-center text-muted">
+                      No movements yet. Add the first movement below.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="mx-auto w-full max-w-5xl space-y-5 px-4 sm:px-6">
+          {renderSlot(
+            { key: 'compact-end', flatIndex: exercises.length, group: null },
+            exercises.length === 0 ? 'Add first movement' : 'Add movement',
+          )}
+          <p className="text-xs text-muted">
+            Edit common fields in the table. Open Details for methods, set-specific targets,
+            per-rep tempo, supersets, equipment, links, and removal.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
       {header}
 
       <Card className="space-y-3">
-        <h2 className="font-semibold">Custom warmup</h2>
+        <h2 className="font-semibold">Workout / Warmup Notes</h2>
         <TextArea
           rows={3}
           value={warmup}
@@ -578,146 +1149,6 @@ export function TemplateEditorPage() {
   )
 }
 
-function AddMovementSlot({
-  label,
-  movements,
-  open,
-  onOpen,
-  onCancel,
-  onSelect,
-  onCreate,
-}: {
-  label: string
-  movements: Movement[]
-  open: boolean
-  onOpen: () => void
-  onCancel: () => void
-  onSelect: (movement: Movement) => void
-  onCreate: (name: string) => void
-}) {
-  const [query, setQuery] = useState('')
-  const [active, setActive] = useState(0)
-
-  const matches = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    const list = q
-      ? movements.filter(
-          (m) =>
-            m.name.toLowerCase().includes(q) ||
-            m.aliases.some((alias) => alias.toLowerCase().includes(q)),
-        )
-      : movements
-    return list.slice(0, 12)
-  }, [movements, query])
-
-  const exact = movements.some((m) => m.name.toLowerCase() === query.trim().toLowerCase())
-  const canCreate = Boolean(query.trim()) && !exact
-
-  useEffect(() => {
-    if (!open) {
-      setQuery('')
-      setActive(0)
-    }
-  }, [open])
-
-  useEffect(() => {
-    setActive(0)
-  }, [query])
-
-  if (!open) {
-    return (
-      <div className="flex justify-center">
-        <button
-          type="button"
-          title={label}
-          aria-label={label}
-          className="flex h-11 w-11 items-center justify-center rounded-full border border-line text-lg leading-none text-muted hover:border-muted hover:text-white"
-          onClick={onOpen}
-        >
-          +
-        </button>
-      </div>
-    )
-  }
-
-  const choose = (index: number) => {
-    if (index < matches.length) {
-      onSelect(matches[index]!)
-      return
-    }
-    if (canCreate) onCreate(query.trim())
-  }
-
-  return (
-    <Card className="space-y-3">
-      <Field label={label}>
-        <TextInput
-          autoFocus
-          placeholder="Search or add a movement…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            const optionCount = matches.length + (canCreate ? 1 : 0)
-            if (e.key === 'ArrowDown') {
-              e.preventDefault()
-              setActive((i) => (optionCount ? (i + 1) % optionCount : 0))
-            } else if (e.key === 'ArrowUp') {
-              e.preventDefault()
-              setActive((i) => (optionCount ? (i - 1 + optionCount) % optionCount : 0))
-            } else if (e.key === 'Enter') {
-              e.preventDefault()
-              choose(active)
-            } else if (e.key === 'Escape') {
-              onCancel()
-            }
-          }}
-        />
-      </Field>
-      <ul className="max-h-56 overflow-auto rounded-xl border border-line">
-        {matches.map((m, i) => (
-          <li key={m.id}>
-            <button
-              type="button"
-              className={`flex min-h-11 w-full flex-col items-start justify-between gap-1 px-3 py-2 text-left text-sm sm:flex-row sm:items-center sm:gap-2 ${
-                i === active ? 'bg-lime/15 text-white' : 'text-muted hover:bg-ink'
-              }`}
-              onMouseEnter={() => setActive(i)}
-              onClick={() => onSelect(m)}
-            >
-              <span className="min-w-0 break-words font-medium text-white">{m.name}</span>
-              {m.muscleGroups.length > 0 && (
-                <span className="break-words text-xs text-muted sm:text-right">
-                  {m.muscleGroups.join(', ')}
-                </span>
-              )}
-            </button>
-          </li>
-        ))}
-        {canCreate && (
-          <li>
-            <button
-              type="button"
-              className={`w-full px-3 py-2 text-left text-sm ${
-                active === matches.length ? 'bg-lime/15 text-white' : 'text-muted hover:bg-ink'
-              }`}
-              onMouseEnter={() => setActive(matches.length)}
-              onClick={() => onCreate(query.trim())}
-            >
-              Add “{query.trim()}” to catalog
-            </button>
-          </li>
-        )}
-        {matches.length === 0 && !canCreate && (
-          <li className="px-3 py-2 text-sm text-muted">No movements match.</li>
-        )}
-      </ul>
-      <Button type="button" variant="ghost" className="text-xs" onClick={onCancel}>
-        Cancel
-      </Button>
-    </Card>
-  )
-}
-
 function ExerciseCard({
   exercise: ex,
   index,
@@ -737,7 +1168,7 @@ function ExerciseCard({
   onAssignSuperset: (group: string | null) => void
   onRemove: () => void
 }) {
-  const [tempoOpen, setTempoOpen] = useState(false)
+  const [tempoOpen, setTempoOpen] = useState(() => hasConfiguredTempo(ex))
   const isRange = ex.method === 'reps_range'
   const showReps = showsRepsField(ex.method)
   const allowPerRep = allowsPerRepTempo(ex.method)
@@ -832,6 +1263,26 @@ function ExerciseCard({
     pauseTop: ex.tempoPauseTop,
   }
 
+  const equipmentUnset = !ex.equipment
+  const equipmentField = (
+    <Field label={equipmentUnset ? 'Equipment' : 'Equipment override'}>
+      <select
+        className="w-full rounded-xl border border-line bg-ink px-3 py-2.5 text-sm"
+        value={ex.equipment ?? ''}
+        onChange={(e) =>
+          onPatch(ex.id, { equipment: (e.target.value || null) as Equipment | null }, true)
+        }
+      >
+        <option value="">—</option>
+        {EQUIPMENT.map((item) => (
+          <option key={item.value} value={item.value}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+    </Field>
+  )
+
   return (
     <Card className="space-y-3">
       <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -884,6 +1335,7 @@ function ExerciseCard({
           </select>
         </Field>
       </div>
+      {equipmentUnset ? equipmentField : null}
       <div
         className={
           showReps
@@ -1124,13 +1576,13 @@ function ExerciseCard({
             </div>
             {tempoMode === 'per_rep' && allowPerRep ? (
               <div className="space-y-4">
-                {(ex.tempoPerRep ?? []).map((tempo, repIndex) => (
+                {resizeTempoPerRep(ex.tempoPerRep, tempoRepCount(ex)).map((tempo, repIndex) => (
                   <div key={repIndex} className="space-y-2">
                     <p className="text-xs text-muted">Rep {repIndex + 1}</p>
                     <TempoFields
                       value={tempo}
                       onChange={(next, persist) => {
-                        const nextList = [...(ex.tempoPerRep ?? [])]
+                        const nextList = resizeTempoPerRep(ex.tempoPerRep, tempoRepCount(ex))
                         nextList[repIndex] = next
                         onPatch(ex.id, { tempoPerRep: nextList }, persist)
                       }}
@@ -1266,24 +1718,7 @@ function ExerciseCard({
           onBlur={(e) => onPatch(ex.id, { notes: e.target.value || null }, true)}
         />
       </Field>
-      <Field label="Equipment override">
-        <select
-          className="w-full rounded-xl border border-line bg-ink px-3 py-2.5 text-sm"
-          value={ex.equipment ?? ''}
-          onChange={(e) =>
-            onPatch(ex.id, { equipment: (e.target.value || null) as Equipment | null }, true)
-          }
-        >
-          <option value="">—</option>
-          <option value="barbell">Barbell</option>
-          <option value="dumbbell">Dumbbell</option>
-          <option value="machine">Machine</option>
-          <option value="cable">Cable</option>
-          <option value="kettlebell">Kettlebell</option>
-          <option value="bodyweight">Bodyweight</option>
-          <option value="other">Other</option>
-        </select>
-      </Field>
+      {equipmentUnset ? null : equipmentField}
     </Card>
   )
 }

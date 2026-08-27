@@ -110,6 +110,8 @@ export type Movement = {
   aliases: string[]
   muscleGroups: string[]
   youtubeUrl: string | null
+  defaultCategory: ExerciseCategory | null
+  defaultEquipment: Equipment | null
   variants: MovementVariant[]
 }
 
@@ -154,6 +156,27 @@ export type WorkoutTemplate = {
   exercises?: TemplateExercise[]
 }
 
+export type ProgramSession = {
+  id: string
+  programId: string
+  templateId: string | null
+  name: string
+  weekIndex: number
+  weekday: number
+  prescription: Prescription
+}
+
+export type Program = {
+  id: string
+  trainerId: string
+  name: string
+  notes: string | null
+  weekCount: number
+  createdAt: string
+  updatedAt: string
+  sessions?: ProgramSession[]
+}
+
 export type SetLog = {
   exerciseIndex: number
   setIndex: number
@@ -185,6 +208,11 @@ export type MeResponse = {
     name: string
     role: Role | null
     bio: string | null
+    phone: string | null
+    location: string | null
+    website: string | null
+    timezone: string | null
+    accentColor: string
     onboardingCompleted: boolean
   }
   trainer: { id: string; code: string } | null
@@ -194,6 +222,19 @@ export type MeResponse = {
     trainerName: string | null
     trainerCode: string | null
   } | null
+}
+
+export type PublicTrainerProfile = {
+  id: string
+  name: string
+  email: string
+  phone: string | null
+  location: string | null
+  website: string | null
+  timezone: string | null
+  bio: string | null
+  code: string
+  accentColor: string
 }
 
 export type TrainerClient = {

@@ -13,7 +13,15 @@ function level(minutes: number) {
   return 4
 }
 
-const COLORS = ['#1c1e18', '#3d4a1f', '#6b8a28', '#9fc53a', '#c6f54e']
+const COLORS = [
+  '#1c1e18',
+  'color-mix(in srgb, var(--color-lime) 25%, #1c1e18)',
+  'color-mix(in srgb, var(--color-lime) 50%, #1c1e18)',
+  'color-mix(in srgb, var(--color-lime) 75%, #1c1e18)',
+  'var(--color-lime)',
+]
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const WEEKDAY_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', '']
 
 export function Heatmap({ year, days }: { year: number; days: ActivityDay[] }) {
   const byDate = useMemo(() => {
@@ -34,37 +42,74 @@ export function Heatmap({ year, days }: { year: number; days: ActivityDay[] }) {
     }
     const columns: { date: string | null; minutes: number }[][] = []
     for (let i = 0; i < cells.length; i += 7) {
-      columns.push(cells.slice(i, i + 7))
+      const week = cells.slice(i, i + 7)
+      while (week.length < 7) week.push({ date: null, minutes: 0 })
+      columns.push(week)
     }
     return columns
   }, [year, byDate])
 
+  const monthLabels = useMemo(() => {
+    const labels: (string | null)[] = weeks.map(() => null)
+    let lastLabeled = -3
+    weeks.forEach((week, i) => {
+      const startsMonth = week.some((cell) => cell.date?.endsWith('-01'))
+      if (!startsMonth && i !== 0) return
+      const dated = week.find((cell) => cell.date)
+      if (!dated?.date) return
+      if (i - lastLabeled < 2) return
+      labels[i] = MONTHS[Number(dated.date.slice(5, 7)) - 1] ?? null
+      lastLabeled = i
+    })
+    return labels
+  }, [weeks])
+
   return (
     <div className="overflow-x-auto">
-      <div className="flex gap-1">
-        {weeks.map((week, i) => (
-          <div key={i} className="flex flex-col gap-1">
-            {week.map((cell, j) => (
+      <div className="inline-flex flex-col gap-1">
+        <div className="flex gap-1">
+          <div className="w-8 shrink-0" />
+          {monthLabels.map((label, i) => (
+            <div key={i} className="h-4 w-3 shrink-0 overflow-visible whitespace-nowrap text-[10px] leading-4 text-muted">
+              {label ?? ''}
+            </div>
+          ))}
+        </div>
+        <div className="flex gap-1">
+          <div className="flex w-8 shrink-0 flex-col gap-1">
+            {WEEKDAY_LABELS.map((label, i) => (
               <div
-                key={j}
-                title={
-                  cell.date
-                    ? `${cell.date}: ${cell.minutes} min`
-                    : undefined
-                }
-                className="h-3 w-3 rounded-[2px]"
-                style={{ background: cell.date ? COLORS[level(cell.minutes)] : 'transparent' }}
-              />
+                key={i}
+                className="h-3 text-[10px] leading-3 text-muted"
+              >
+                {label}
+              </div>
             ))}
           </div>
-        ))}
-      </div>
-      <div className="mt-3 flex items-center gap-1 text-xs text-muted">
-        Less
-        {COLORS.map((c) => (
-          <span key={c} className="h-3 w-3 rounded-[2px]" style={{ background: c }} />
-        ))}
-        More
+          {weeks.map((week, i) => (
+            <div key={i} className="flex flex-col gap-1">
+              {week.map((cell, j) => (
+                <div
+                  key={j}
+                  title={
+                    cell.date
+                      ? `${cell.date}: ${cell.minutes} min`
+                      : undefined
+                  }
+                  className="h-3 w-3 rounded-[2px]"
+                  style={{ background: cell.date ? COLORS[level(cell.minutes)] : 'transparent' }}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 flex items-center justify-end gap-1 text-xs text-muted">
+          Less
+          {COLORS.map((c) => (
+            <span key={c} className="h-3 w-3 rounded-[2px]" style={{ background: c }} />
+          ))}
+          More
+        </div>
       </div>
     </div>
   )

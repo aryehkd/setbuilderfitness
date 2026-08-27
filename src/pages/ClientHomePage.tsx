@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Card, Field, TextInput } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
+import { useAuth } from '../lib/auth.tsx'
 import type { AdHocType, Session } from '../../shared/types.ts'
 
 function monthMatrix(year: number, month: number) {
@@ -16,6 +17,7 @@ function monthMatrix(year: number, month: number) {
 }
 
 export function ClientHomePage() {
+  const { me } = useAuth()
   const now = new Date()
   const [cursor, setCursor] = useState({ y: now.getFullYear(), m: now.getMonth() })
   const [view, setView] = useState<'calendar' | 'list'>(() =>
@@ -73,21 +75,41 @@ export function ClientHomePage() {
     setMessage('Logged extra activity.')
   }
 
+  const trainer = me?.client?.trainerId
+    ? { name: me.client.trainerName, code: me.client.trainerCode }
+    : null
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
+      {trainer && (
+        <Link
+          to="/trainer"
+          className="flex min-h-14 items-center justify-between gap-3 rounded-2xl border border-line bg-panel px-4 py-3 hover:border-lime sm:px-5"
+        >
+          <div className="min-w-0">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted">Your trainer</p>
+            <p className="truncate font-semibold">{trainer.name || 'View profile'}</p>
+          </div>
+          {trainer.code && (
+            <span className="shrink-0 rounded-md bg-lime/15 px-2 py-0.5 font-mono text-sm text-lime">
+              {trainer.code}
+            </span>
+          )}
+        </Link>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-bold sm:text-3xl">Your training</h1>
         <div className="flex rounded-xl border border-line p-1 text-sm">
           <button
             type="button"
-            className={`min-h-11 rounded-lg px-3 py-1 ${view === 'calendar' ? 'bg-lime text-ink' : 'text-muted'}`}
+            className={`min-h-11 rounded-lg px-3 py-1 ${view === 'calendar' ? 'bg-lime text-accent-contrast' : 'text-muted'}`}
             onClick={() => setView('calendar')}
           >
             Calendar
           </button>
           <button
             type="button"
-            className={`min-h-11 rounded-lg px-3 py-1 ${view === 'list' ? 'bg-lime text-ink' : 'text-muted'}`}
+            className={`min-h-11 rounded-lg px-3 py-1 ${view === 'list' ? 'bg-lime text-accent-contrast' : 'text-muted'}`}
             onClick={() => setView('list')}
           >
             List

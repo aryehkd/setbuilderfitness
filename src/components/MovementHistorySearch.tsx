@@ -3,7 +3,13 @@ import { Card, TextInput } from './ui.tsx'
 import { api } from '../lib/api.ts'
 import type { ExerciseHistoryEntry, LoggedMovement } from '../../shared/types.ts'
 
-export function MovementHistorySearch({ clientId }: { clientId: string }) {
+export function MovementHistorySearch({
+  clientId,
+  description = 'Search movements this client has logged.',
+}: {
+  clientId: string
+  description?: string
+}) {
   const [movements, setMovements] = useState<LoggedMovement[]>([])
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<LoggedMovement | null>(null)
@@ -53,9 +59,7 @@ export function MovementHistorySearch({ clientId }: { clientId: string }) {
     <Card className="space-y-3">
       <div>
         <h2 className="font-semibold">Movement history</h2>
-        <p className="text-sm text-muted">
-          Search movements this client has logged.
-        </p>
+        <p className="text-sm text-muted">{description}</p>
       </div>
       <div className="relative">
         <TextInput

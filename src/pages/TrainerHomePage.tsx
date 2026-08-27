@@ -3,17 +3,19 @@ import { Link } from 'react-router-dom'
 import { Button, Card } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
 import { useAuth } from '../lib/auth.tsx'
-import type { Session, TrainerClient, WorkoutTemplate } from '../../shared/types.ts'
+import type { Program, Session, TrainerClient, WorkoutTemplate } from '../../shared/types.ts'
 
 export function TrainerHomePage() {
   const { me } = useAuth()
   const [clients, setClients] = useState<TrainerClient[]>([])
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([])
+  const [programs, setPrograms] = useState<Program[]>([])
   const [upcoming, setUpcoming] = useState<Session[]>([])
 
   useEffect(() => {
     void api<TrainerClient[]>('/api/clients').then(setClients)
     void api<WorkoutTemplate[]>('/api/templates').then(setTemplates)
+    void api<Program[]>('/api/programs').then(setPrograms)
     const from = new Date().toISOString().slice(0, 10)
     void api<Session[]>(`/api/sessions?from=${from}`).then(setUpcoming)
   }, [])
@@ -30,9 +32,16 @@ export function TrainerHomePage() {
             </span>
           </p>
         </div>
-        <Link to="/workouts" className="w-full sm:w-auto">
-          <Button className="w-full sm:w-auto">New workout</Button>
-        </Link>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+          <Link to="/programs" className="w-full sm:w-auto">
+            <Button variant="ghost" className="w-full sm:w-auto">
+              Programs
+            </Button>
+          </Link>
+          <Link to="/workouts" className="w-full sm:w-auto">
+            <Button className="w-full sm:w-auto">New workout</Button>
+          </Link>
+        </div>
       </div>
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
@@ -66,6 +75,21 @@ export function TrainerHomePage() {
               <li key={t.id}>
                 <Link to={`/workouts/${t.id}`} className="text-sm hover:text-lime">
                   {t.name}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
+        <Card>
+          <h2 className="mb-3 font-semibold">Programs</h2>
+          {programs.length === 0 && (
+            <p className="text-sm text-muted">Build a program from your saved workouts.</p>
+          )}
+          <ul className="space-y-2">
+            {programs.slice(0, 6).map((program) => (
+              <li key={program.id}>
+                <Link to={`/programs/${program.id}`} className="text-sm hover:text-lime">
+                  {program.name}
                 </Link>
               </li>
             ))}
