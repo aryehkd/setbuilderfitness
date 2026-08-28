@@ -6,6 +6,7 @@ import type {
   ExerciseCategory,
   MeResponse,
   Movement,
+  MovementHistoryById,
   PrescribedExercise,
   Prescription,
   Session,
@@ -18,8 +19,19 @@ import type {
   WorkoutTemplate,
   Program,
   ProgramSession,
+  VersionHistoryEvent,
 } from '../../shared/types.ts'
-import { warmupToText } from '../../shared/types.ts'
+import { setLogIsCompleted, warmupToText } from '../../shared/types.ts'
+import {
+  assignedEvent,
+  diffHistoryExercises,
+  diffPrescriptions,
+  diffProgramPlacement,
+  diffTemplateMeta,
+  editEvents,
+  historyExerciseFromTemplate,
+  parseVersionHistory,
+} from '../../shared/versionHistory.ts'
 import { devAuthEnabled, devPersonaFromRequest } from './devAuth.ts'
 import { MOVEMENT_SEEDS } from './movements.ts'
 import {
@@ -684,6 +696,7 @@ type TemplateRow = {
   warmup: unknown
   created_at: unknown
   updated_at: unknown
+  version_history?: unknown
 }
 
 type ExerciseRow = {
@@ -759,7 +772,60 @@ function mapTemplate(row: TemplateRow, exercises?: TemplateExercise[]): WorkoutT
     createdAt: asIso(row.created_at) ?? '',
     updatedAt: asIso(row.updated_at) ?? '',
     exercises,
+    versionHistory: parseVersionHistory(row.version_history),
   }
+}
+
+async function appendHistory(
+  db: Db,
+  table: 'workout_templates' | 'program_sessions' | 'sessions',
+  id: string,
+  events: VersionHistoryEvent[],
+) {
+  if (!events.length) return
+  const payload = JSON.stringify(events)
+  if (table === 'workout_templates') {
+    await db.sql`
+      UPDATE workout_templates
+      SET version_history = COALESCE(version_history, '[]'::jsonb) || CAST(${payload} AS jsonb)
+      WHERE id = ${id}
+    `
+    return
+  }
+  if (table === 'program_sessions') {
+    await db.sql`
+      UPDATE program_sessions
+      SET version_history = COALESCE(version_history, '[]'::jsonb) || CAST(${payload} AS jsonb)
+      WHERE id = ${id}
+    `
+    return
+  }
+  await db.sql`
+    UPDATE sessions
+    SET version_history = COALESCE(version_history, '[]'::jsonb) || CAST(${payload} AS jsonb)
+    WHERE id = ${id}
+  `
+}
+
+async function templateHasBeenAssigned(db: Db, templateId: string) {
+  const rows = await db.sql<{ ok: number }>`
+    SELECT 1 AS ok
+    FROM sessions
+    WHERE template_id = ${templateId}
+    UNION ALL
+    SELECT 1
+    FROM program_sessions
+    WHERE template_id = ${templateId}
+    LIMIT 1
+  `
+  return Boolean(rows[0])
+}
+
+async function appendTemplateEdits(db: Db, templateId: string, texts: string[]) {
+  const events = editEvents(texts)
+  if (!events.length) return
+  if (!(await templateHasBeenAssigned(db, templateId))) return
+  await appendHistory(db, 'workout_templates', templateId, events)
 }
 
 async function loadExercises(db: Db, templateId: string) {
@@ -835,8 +901,24 @@ export async function handleUpdateTemplate(ctx: AppContext, id: string, req: Req
     WHERE id = ${id}
     RETURNING *
   `
+  await appendTemplateEdits(
+    ctx.db,
+    id,
+    diffTemplateMeta(
+      {
+        name: existing[0].name,
+        notes: existing[0].notes,
+        warmup: warmupToText(existing[0].warmup),
+      },
+      { name, notes, warmup },
+    ),
+  )
+  const refreshed = await ctx.db.sql<TemplateRow>`
+    SELECT * FROM workout_templates
+    WHERE id = ${id} AND trainer_id = ${ctx.trainer!.id}
+  `
   const exercises = await loadExercises(ctx.db, id)
-  return json(mapTemplate(row!, exercises))
+  return json(mapTemplate(refreshed[0] ?? row!, exercises))
 }
 
 export async function handleDeleteTemplate(ctx: AppContext, id: string) {
@@ -867,6 +949,7 @@ type ProgramSessionRow = {
   week_index: number
   weekday: number
   prescription: unknown
+  version_history?: unknown
 }
 
 function mapProgramSession(row: ProgramSessionRow): ProgramSession {
@@ -885,6 +968,7 @@ function mapProgramSession(row: ProgramSessionRow): ProgramSession {
       warmup: warmupToText(prescription.warmup),
       exercises: prescription.exercises ?? [],
     },
+    versionHistory: parseVersionHistory(row.version_history),
   }
 }
 
@@ -1097,19 +1181,28 @@ export async function handleAddProgramSessions(ctx: AppContext, programId: strin
     for (const weekday of weekdays) {
       const [row] = await ctx.db.sql<ProgramSessionRow>`
         INSERT INTO program_sessions (
-          program_id, template_id, name, week_index, weekday, prescription
+          program_id, template_id, name, week_index, weekday, prescription, version_history
         ) VALUES (
           ${programId},
           ${sourceTemplateId},
           ${programWorkoutName(sourceName, week, program.name)},
           ${week},
           ${weekday},
-          CAST(${JSON.stringify(prescription)} AS jsonb)
+          CAST(${JSON.stringify(prescription)} AS jsonb),
+          CAST(${JSON.stringify([assignedEvent(programWorkoutName(sourceName, week, program.name))])} AS jsonb)
         )
         RETURNING *
       `
       created.push(mapProgramSession(row!))
     }
+  }
+  if (sourceTemplateId) {
+    await appendHistory(
+      ctx.db,
+      'workout_templates',
+      sourceTemplateId,
+      created.map((item) => assignedEvent(item.name)),
+    )
   }
   await ctx.db.sql`UPDATE programs SET updated_at = NOW() WHERE id = ${programId}`
   return json(created, 201)
@@ -1171,6 +1264,18 @@ export async function handleUpdateProgramSession(
   ) {
     return error('Choose a valid day in this program')
   }
+  const previous = mapProgramSession(existing[0])
+  const nextPrescription = body.prescription
+    ? (prescription as Prescription)
+    : previous.prescription
+  const history = editEvents([
+    ...(name !== previous.name ? [`Renamed workout from ${previous.name} to ${name}`] : []),
+    ...diffProgramPlacement(previous, { weekIndex, weekday }),
+    ...diffPrescriptions(previous.prescription, {
+      warmup: warmupToText((nextPrescription as Prescription).warmup),
+      exercises: (nextPrescription as Prescription).exercises ?? [],
+    }),
+  ])
   const [row] = await ctx.db.sql<ProgramSessionRow>`
     UPDATE program_sessions
     SET name = ${name},
@@ -1181,8 +1286,12 @@ export async function handleUpdateProgramSession(
     WHERE id = ${sessionId}
     RETURNING *
   `
+  await appendHistory(ctx.db, 'program_sessions', sessionId, history)
   await ctx.db.sql`UPDATE programs SET updated_at = NOW() WHERE id = ${programId}`
-  return json(mapProgramSession(row!))
+  return json({
+    ...mapProgramSession(row!),
+    versionHistory: [...parseVersionHistory(row!.version_history), ...history],
+  })
 }
 
 export async function handleDeleteProgramSession(
@@ -1222,18 +1331,24 @@ export async function handleAssignProgram(ctx: AppContext, programId: string, re
     const scheduledDate = addUtcDays(startMonday, item.weekIndex * 7 + item.weekday)
     const [row] = await ctx.db.sql<SessionRow>`
       INSERT INTO sessions (
-        client_id, trainer_id, template_id, name, scheduled_date, prescription
+        client_id, trainer_id, template_id, name, scheduled_date, prescription, version_history
       ) VALUES (
         ${body.clientId},
         ${ctx.trainer!.id},
         ${item.templateId},
         ${item.name},
         ${scheduledDate},
-        CAST(${JSON.stringify(item.prescription)} AS jsonb)
+        CAST(${JSON.stringify(item.prescription)} AS jsonb),
+        CAST(${JSON.stringify([assignedEvent(item.name)])} AS jsonb)
       )
       RETURNING *
     `
     created.push(mapSession(row!))
+    if (item.templateId) {
+      await appendHistory(ctx.db, 'workout_templates', item.templateId, [
+        assignedEvent(item.name),
+      ])
+    }
   }
   return json(created, 201)
 }
@@ -1266,6 +1381,14 @@ export async function handleUpsertExercise(
   }
 
   if (exerciseId) {
+    const beforeRows = await ctx.db.sql<ExerciseRow>`
+      SELECT e.*, m.name AS movement_name
+      FROM template_exercises e
+      JOIN movements m ON m.id = e.movement_id
+      WHERE e.id = ${exerciseId} AND e.template_id = ${templateId}
+    `
+    if (!beforeRows[0]) return error('Exercise not found', 404)
+    const before = mapExercise(beforeRows[0])
     await ctx.db.sql`
       UPDATE template_exercises SET
         movement_id = COALESCE(${body.movementId ?? null}, movement_id),
@@ -1302,8 +1425,17 @@ export async function handleUpsertExercise(
       WHERE e.id = ${exerciseId} AND e.template_id = ${templateId}
     `
     if (!rows[0]) return error('Exercise not found', 404)
+    const after = mapExercise(rows[0])
+    await appendTemplateEdits(
+      ctx.db,
+      templateId,
+      diffHistoryExercises(
+        [historyExerciseFromTemplate(before, before.sortOrder)],
+        [historyExerciseFromTemplate(after, after.sortOrder)],
+      ),
+    )
     await ctx.db.sql`UPDATE workout_templates SET updated_at = NOW() WHERE id = ${templateId}`
-    return json(mapExercise(rows[0]))
+    return json(after)
   }
 
   const max = await ctx.db.sql<{ max: number | null }>`
@@ -1342,7 +1474,9 @@ export async function handleUpsertExercise(
     WHERE e.id = ${row!.id}
   `
   await ctx.db.sql`UPDATE workout_templates SET updated_at = NOW() WHERE id = ${templateId}`
-  return json(mapExercise(inserted[0]!), 201)
+  const createdExercise = mapExercise(inserted[0]!)
+  await appendTemplateEdits(ctx.db, templateId, [`Added ${createdExercise.movementName}`])
+  return json(createdExercise, 201)
 }
 
 export async function handleReorderExercises(
@@ -1449,7 +1583,19 @@ export async function handleReorderExercises(
     WHERE id = ${templateId} AND trainer_id = ${ctx.trainer!.id}
   `
   const exercises = await loadExercises(ctx.db, templateId)
-  return json(mapTemplate(rows[0]!, exercises))
+  await appendTemplateEdits(
+    ctx.db,
+    templateId,
+    diffHistoryExercises(
+      existing.map((exercise, index) => historyExerciseFromTemplate(exercise, index)),
+      exercises.map((exercise, index) => historyExerciseFromTemplate(exercise, index)),
+    ),
+  )
+  const refreshed = await ctx.db.sql<TemplateRow>`
+    SELECT * FROM workout_templates
+    WHERE id = ${templateId} AND trainer_id = ${ctx.trainer!.id}
+  `
+  return json(mapTemplate(refreshed[0] ?? rows[0]!, exercises))
 }
 
 export async function handleDeleteExercise(
@@ -1459,6 +1605,16 @@ export async function handleDeleteExercise(
 ) {
   const denied = requireTrainer(ctx)
   if (denied) return denied
+  const existing = await ctx.db.sql<ExerciseRow>`
+    SELECT e.*, m.name AS movement_name
+    FROM template_exercises e
+    JOIN movements m ON m.id = e.movement_id
+    WHERE e.id = ${exerciseId}
+      AND e.template_id = ${templateId}
+      AND e.template_id IN (
+        SELECT id FROM workout_templates WHERE trainer_id = ${ctx.trainer!.id}
+      )
+  `
   await ctx.db.sql`
     DELETE FROM template_exercises
     WHERE id = ${exerciseId}
@@ -1467,6 +1623,9 @@ export async function handleDeleteExercise(
         SELECT id FROM workout_templates WHERE trainer_id = ${ctx.trainer!.id}
       )
   `
+  if (existing[0]) {
+    await appendTemplateEdits(ctx.db, templateId, [`Removed ${mapExercise(existing[0]).movementName}`])
+  }
   return json({ ok: true })
 }
 
@@ -1562,6 +1721,7 @@ type SessionRow = {
   logged_duration_seconds: number | null
   completed_at: unknown
   client_name?: string
+  version_history?: unknown
 }
 
 function mapSession(row: SessionRow, logs: SetLog[] = []): Session {
@@ -1584,6 +1744,7 @@ function mapSession(row: SessionRow, logs: SetLog[] = []): Session {
     completedAt: asIso(row.completed_at),
     logs,
     clientName: row.client_name,
+    versionHistory: parseVersionHistory(row.version_history),
   }
 }
 
@@ -1631,19 +1792,22 @@ export async function handleAssignSession(ctx: AppContext, req: Request) {
   `
   if (!templates[0]) return error('Template not found', 404)
   const prescription = await buildPrescription(ctx.db, body.templateId)
+  const assigned = assignedEvent(templates[0].name)
   const [row] = await ctx.db.sql<SessionRow>`
     INSERT INTO sessions (
-      client_id, trainer_id, template_id, name, scheduled_date, prescription
+      client_id, trainer_id, template_id, name, scheduled_date, prescription, version_history
     ) VALUES (
       ${body.clientId},
       ${ctx.trainer!.id},
       ${body.templateId},
       ${templates[0].name},
       ${body.date},
-      CAST(${JSON.stringify(prescription)} AS jsonb)
+      CAST(${JSON.stringify(prescription)} AS jsonb),
+      CAST(${JSON.stringify([assigned])} AS jsonb)
     )
     RETURNING *
   `
+  await appendHistory(ctx.db, 'workout_templates', body.templateId, [assigned])
   return json(mapSession(row!), 201)
 }
 
@@ -1782,6 +1946,21 @@ export async function handleUpdateSession(ctx: AppContext, id: string, req: Requ
     return error('Invalid workout prescription')
   }
 
+  const current = await ctx.db.sql<SessionRow>`
+    SELECT * FROM sessions
+    WHERE id = ${id} AND trainer_id = ${ctx.trainer!.id}
+  `
+  if (!current[0]) return error('Session not found', 404)
+  const previous = mapSession(current[0])
+  const nextPrescription = body.prescription as Prescription
+  const history = editEvents([
+    ...(name !== previous.name ? [`Renamed workout from ${previous.name} to ${name}`] : []),
+    ...diffPrescriptions(previous.prescription, {
+      warmup: warmupToText(nextPrescription.warmup),
+      exercises: nextPrescription.exercises ?? [],
+    }),
+  ])
+
   const [updated] = await ctx.db.sql<SessionRow>`
     UPDATE sessions AS s
     SET
@@ -1795,7 +1974,13 @@ export async function handleUpdateSession(ctx: AppContext, id: string, req: Requ
       )
     RETURNING s.*
   `
-  if (updated) return json(mapSession(updated))
+  if (updated) {
+    await appendHistory(ctx.db, 'sessions', id, history)
+    return json({
+      ...mapSession(updated),
+      versionHistory: [...(parseVersionHistory(updated.version_history)), ...history],
+    })
+  }
 
   const owned = await ctx.db.sql<{ id: string }>`
     SELECT id FROM sessions
@@ -1823,9 +2008,9 @@ export async function handleLogSession(ctx: AppContext, id: string, req: Request
       await ctx.db.sql`
         INSERT INTO session_set_logs (
           session_id, exercise_index, set_index, weight, reps, completed
-        ) VALUES (
+        )         VALUES (
           ${id}, ${log.exerciseIndex}, ${log.setIndex},
-          ${log.weight ?? null}, ${log.reps ?? null}, ${log.completed}
+          ${log.weight ?? null}, ${log.reps ?? null}, ${setLogIsCompleted(log)}
         )
         ON CONFLICT (session_id, exercise_index, set_index)
         DO UPDATE SET
@@ -1972,23 +2157,25 @@ export async function handleExerciseHistory(ctx: AppContext, req: Request) {
   const subjectClient = await authorizedClient(ctx, url.searchParams.get('clientId'))
   if (!subjectClient) return error('Client not found', 404)
   const rows = await ctx.db.sql<{
+    session_id: string
     scheduled_date: unknown
     name: string
     set_index: number
     weight: unknown
     reps: number | null
   }>`
-    SELECT s.scheduled_date, s.name, l.set_index, l.weight, l.reps
+    SELECT s.id AS session_id, s.scheduled_date, s.name, l.set_index, l.weight, l.reps
     FROM session_set_logs l
     JOIN sessions s ON s.id = l.session_id
     WHERE s.client_id = ${subjectClient.id}
-      AND l.completed = TRUE
+      AND (l.weight IS NOT NULL OR l.reps IS NOT NULL)
       AND s.prescription -> 'exercises' -> l.exercise_index ->> 'movementId' = ${movementId}
     ORDER BY s.scheduled_date DESC, l.set_index ASC
     LIMIT 80
   `
   return json(
     rows.map((r) => ({
+      sessionId: r.session_id,
       date: asDate(r.scheduled_date),
       sessionName: r.name,
       setIndex: r.set_index,
@@ -1996,6 +2183,71 @@ export async function handleExerciseHistory(ctx: AppContext, req: Request) {
       reps: r.reps,
     })),
   )
+}
+
+export async function handleExerciseHistoryBatch(ctx: AppContext, req: Request) {
+  const url = new URL(req.url)
+  const movementIds = [
+    ...new Set(
+      (url.searchParams.get('movementIds') ?? '')
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean),
+    ),
+  ]
+  if (movementIds.length === 0) return error('movementIds is required')
+  if (movementIds.length > 50) return error('A maximum of 50 movementIds is allowed')
+
+  const subjectClient = await authorizedClient(ctx, url.searchParams.get('clientId'))
+  if (!subjectClient) return error('Client not found', 404)
+
+  const rows = await ctx.db.sql<{
+    movement_id: string
+    session_id: string
+    scheduled_date: unknown
+    name: string
+    set_index: number
+    weight: unknown
+    reps: number | null
+  }>`
+    WITH matching_logs AS (
+      SELECT
+        s.prescription -> 'exercises' -> l.exercise_index ->> 'movementId' AS movement_id,
+        s.id AS session_id,
+        s.scheduled_date,
+        s.name,
+        l.set_index,
+        l.weight,
+        l.reps,
+        ROW_NUMBER() OVER (
+          PARTITION BY s.prescription -> 'exercises' -> l.exercise_index ->> 'movementId'
+          ORDER BY s.scheduled_date DESC, s.completed_at DESC NULLS LAST, s.id, l.set_index ASC
+        ) AS movement_row
+      FROM session_set_logs l
+      JOIN sessions s ON s.id = l.session_id
+      WHERE s.client_id = ${subjectClient.id}
+        AND (l.weight IS NOT NULL OR l.reps IS NOT NULL)
+        AND s.prescription -> 'exercises' -> l.exercise_index ->> 'movementId'
+          = ANY(string_to_array(${movementIds.join(',')}, ','))
+    )
+    SELECT movement_id, session_id, scheduled_date, name, set_index, weight, reps
+    FROM matching_logs
+    WHERE movement_row <= 80
+    ORDER BY movement_id, scheduled_date DESC, set_index ASC
+  `
+
+  const history: MovementHistoryById = Object.fromEntries(movementIds.map((id) => [id, []]))
+  for (const row of rows) {
+    history[row.movement_id]!.push({
+      sessionId: row.session_id,
+      date: asDate(row.scheduled_date),
+      sessionName: row.name,
+      setIndex: row.set_index,
+      weight: asNumber(row.weight),
+      reps: row.reps,
+    })
+  }
+  return json(history)
 }
 
 export async function handleLoggedMovements(ctx: AppContext, req: Request) {
@@ -2011,7 +2263,7 @@ export async function handleLoggedMovements(ctx: AppContext, req: Request) {
     JOIN movements m
       ON m.id::text = s.prescription -> 'exercises' -> l.exercise_index ->> 'movementId'
     WHERE s.client_id = ${subjectClient.id}
-      AND l.completed = TRUE
+      AND (l.weight IS NOT NULL OR l.reps IS NOT NULL)
     ORDER BY m.name
   `
   return json(rows)

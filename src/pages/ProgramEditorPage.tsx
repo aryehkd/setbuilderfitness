@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Button, Card, Field, Select, TextInput } from '../components/ui.tsx'
+import { Button, Card, ConfirmLink, Field, Select, TextInput } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
 import type { Program, WorkoutTemplate } from '../../shared/types.ts'
 
@@ -339,13 +339,13 @@ export function ProgramEditorPage() {
                         >
                           {item.name}
                         </Link>
-                        <button
-                          type="button"
+                        <ConfirmLink
                           className="text-[10px] text-red-300"
-                          onClick={() => void removeSession(item.id)}
+                          confirmLabel="Confirm"
+                          onConfirm={() => void removeSession(item.id)}
                         >
                           Remove
-                        </button>
+                        </ConfirmLink>
                       </div>
                     ))}
                     <button

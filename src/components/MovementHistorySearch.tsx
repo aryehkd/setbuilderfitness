@@ -47,7 +47,7 @@ export function MovementHistorySearch({
   const groupedHistory = useMemo(() => {
     const groups = new Map<string, ExerciseHistoryEntry[]>()
     for (const entry of history) {
-      const key = `${entry.date}\u0000${entry.sessionName}`
+      const key = entry.sessionId
       const entries = groups.get(key) ?? []
       entries.push(entry)
       groups.set(key, entries)

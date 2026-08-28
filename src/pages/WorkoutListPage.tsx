@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Button, Card } from '../components/ui.tsx'
+import { Button, Card, ConfirmLink } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
 import type { WorkoutTemplate } from '../../shared/types.ts'
 
@@ -36,16 +36,16 @@ export function WorkoutListPage() {
             <Link to={`/workouts/${t.id}`} className="min-w-0 break-words font-medium hover:text-lime">
               {t.name}
             </Link>
-            <button
-              type="button"
+            <ConfirmLink
               className="min-h-11 shrink-0 text-xs text-red-300 sm:min-h-0"
-              onClick={async () => {
+              confirmLabel="Confirm delete"
+              onConfirm={async () => {
                 await api(`/api/templates/${t.id}`, { method: 'DELETE' })
                 load()
               }}
             >
               Delete
-            </button>
+            </ConfirmLink>
           </Card>
         ))}
         {templates.length === 0 && (

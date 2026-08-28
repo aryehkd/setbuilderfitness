@@ -9,6 +9,8 @@ import {
   setTarget,
 } from '../components/PrescribedExerciseCard.tsx'
 import { SessionPrescriptionEditor } from '../components/SessionPrescriptionEditor.tsx'
+import { VersionHistory } from '../components/VersionHistory.tsx'
+import { useMovementHistoryContext } from '../hooks/useMovementHistoryContext.ts'
 import { api } from '../lib/api.ts'
 import { useAuth } from '../lib/auth.tsx'
 import type {
@@ -18,7 +20,7 @@ import type {
   Session,
   SetLog,
 } from '../../shared/types.ts'
-import { warmupToText } from '../../shared/types.ts'
+import { setLogIsCompleted, warmupToText } from '../../shared/types.ts'
 
 export function SessionDetailPage() {
   const { id } = useParams()
@@ -34,6 +36,10 @@ export function SessionDetailPage() {
   const [movements, setMovements] = useState<Movement[]>([])
   const [savingAssignment, setSavingAssignment] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+  const assignmentHistory = useMovementHistoryContext(
+    !isClient && editing ? (session?.clientId ?? '') : '',
+    draft?.prescription.exercises.map((exercise) => exercise.movementId) ?? [],
+  )
 
   const logMap = useMemo(() => {
     const map = new Map<string, SetLog>()
@@ -67,6 +73,7 @@ export function SessionDetailPage() {
       completed: false,
     }
     const next = { ...current, ...patch }
+    next.completed = setLogIsCompleted(next)
     const others = session.logs.filter(
       (l) => !(l.exerciseIndex === exerciseIndex && l.setIndex === setIndex),
     )
@@ -186,6 +193,10 @@ export function SessionDetailPage() {
           name={draft.name}
           prescription={draft.prescription}
           movements={movements}
+          clientName={session.clientName || 'Client'}
+          movementHistory={assignmentHistory.history}
+          movementHistoryLoading={assignmentHistory.loading}
+          movementHistoryError={assignmentHistory.error}
           onChange={setDraft}
         />
 
@@ -207,6 +218,7 @@ export function SessionDetailPage() {
             {savingAssignment ? 'Saving…' : 'Save changes'}
           </Button>
         </Card>
+        <VersionHistory events={session.versionHistory} />
       </div>
     )
   }
@@ -278,7 +290,7 @@ export function SessionDetailPage() {
                           Set {setIndex + 1}: {target}
                         </p>
                       ) : null}
-                      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto]">
+                      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)]">
                         <span className="text-xs text-muted">Set {setIndex + 1}</span>
                         <TextInput
                           disabled={!isClient}
@@ -308,17 +320,6 @@ export function SessionDetailPage() {
                             })
                           }
                         />
-                        <label className="col-start-2 flex min-h-11 items-center gap-2 text-xs sm:col-start-auto sm:min-h-0">
-                          <input
-                            type="checkbox"
-                            disabled={!isClient}
-                            checked={Boolean(log?.completed)}
-                            onChange={(e) =>
-                              updateLog(exerciseIndex, setIndex, { completed: e.target.checked })
-                            }
-                          />
-                          Done
-                        </label>
                       </div>
                     </div>
                   )
@@ -362,6 +363,7 @@ export function SessionDetailPage() {
           </div>
         </Card>
       )}
+      {!isClient ? <VersionHistory events={session.versionHistory} /> : null}
     </div>
   )
 }

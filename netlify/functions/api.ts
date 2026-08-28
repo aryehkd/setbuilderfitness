@@ -16,6 +16,7 @@ import {
   handleDeleteTemplate,
   handleDevReset,
   handleExerciseHistory,
+  handleExerciseHistoryBatch,
   handleGetAssignedTrainer,
   handleGetMe,
   handleGetProgram,
@@ -179,6 +180,9 @@ export default async (req: Request) => {
     }
     if (path === '/api/exercise-history' && req.method === 'GET') {
       return await handleExerciseHistory(ctx, req)
+    }
+    if (path === '/api/exercise-history/batch' && req.method === 'GET') {
+      return await handleExerciseHistoryBatch(ctx, req)
     }
     if (path === '/api/logged-movements' && req.method === 'GET') {
       return await handleLoggedMovements(ctx, req)

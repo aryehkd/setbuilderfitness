@@ -89,6 +89,7 @@ export const workoutTemplates = pgTable('workout_templates', {
   name: text('name').notNull(),
   notes: text('notes'),
   warmup: jsonb('warmup').notNull().default([]),
+  versionHistory: jsonb('version_history').notNull().default([]),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
@@ -157,6 +158,7 @@ export const programSessions = pgTable(
     weekIndex: integer('week_index').notNull(),
     weekday: integer('weekday').notNull(),
     prescription: jsonb('prescription').notNull(),
+    versionHistory: jsonb('version_history').notNull().default([]),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -182,6 +184,7 @@ export const sessions = pgTable(
     prescription: jsonb('prescription').notNull(),
     loggedDurationSeconds: integer('logged_duration_seconds'),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    versionHistory: jsonb('version_history').notNull().default([]),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

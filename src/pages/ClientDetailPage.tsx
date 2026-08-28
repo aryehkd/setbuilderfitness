@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Heatmap } from '../components/Heatmap.tsx'
 import { MovementHistorySearch } from '../components/MovementHistorySearch.tsx'
-import { Button, Card, Field, TextInput } from '../components/ui.tsx'
+import { Button, Card, ConfirmLink, Field, TextInput } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
 import type {
   ActivityDay,
@@ -139,16 +139,16 @@ export function ClientDetailPage() {
               <Link to={`/sessions/${s.id}`} className="break-words">
                 {s.scheduledDate} · {s.name} · {s.status}
               </Link>
-              <button
-                type="button"
+              <ConfirmLink
                 className="min-h-11 shrink-0 text-xs text-red-300 sm:min-h-0"
-                onClick={async () => {
+                confirmLabel="Confirm unassign"
+                onConfirm={async () => {
                   await api(`/api/sessions/${s.id}`, { method: 'DELETE' })
                   await load()
                 }}
               >
                 Unassign
-              </button>
+              </ConfirmLink>
             </li>
           ))}
         </ul>

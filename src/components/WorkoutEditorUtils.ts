@@ -61,6 +61,12 @@ export function quantityLabel(method: SetMethod) {
   return 'Reps'
 }
 
+export function quantityDefaultsForMethod(method: SetMethod) {
+  if (method === 'timed') return { repsMin: 30, repsMax: null as number | null }
+  if (method === 'reps_range') return { repsMin: 8, repsMax: 10 as number | null }
+  return { repsMin: 8, repsMax: null as number | null }
+}
+
 export function emptyTempo(): Tempo {
   return { eccentric: null, pauseBottom: null, concentric: null, pauseTop: null }
 }
@@ -97,4 +103,33 @@ export function resizeSetPrescriptions(
   const next = (current ?? []).slice(0, safeCount)
   while (next.length < safeCount) next.push({ ...fallback })
   return next
+}
+
+type SupersetMember = { supersetGroup?: string | null; supersetOrder?: number | null }
+
+/**
+ * Renumbers one superset in list order, dissolving it when fewer than two
+ * movements are left. Returns the original array when nothing changes so
+ * callers can skip a save.
+ */
+export function resettleSuperset<T extends SupersetMember>(exercises: T[], group: string): T[] {
+  const inGroup = (exercise: SupersetMember) => exercise.supersetGroup?.trim() === group
+  const memberCount = exercises.filter(inGroup).length
+  if (memberCount === 0) return exercises
+
+  let order = 0
+  const next = exercises.map((exercise) => {
+    if (!inGroup(exercise)) return exercise
+    if (memberCount < 2) return { ...exercise, supersetGroup: null, supersetOrder: null }
+    order += 1
+    return { ...exercise, supersetGroup: group, supersetOrder: order }
+  })
+  const changed = next.some((exercise, index) => {
+    const current = exercises[index]!
+    return (
+      (current.supersetGroup ?? null) !== (exercise.supersetGroup ?? null) ||
+      (current.supersetOrder ?? null) !== (exercise.supersetOrder ?? null)
+    )
+  })
+  return changed ? next : exercises
 }

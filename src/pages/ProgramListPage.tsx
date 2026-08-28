@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Button, Card } from '../components/ui.tsx'
+import { Button, Card, ConfirmLink } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
 import type { Program } from '../../shared/types.ts'
 
@@ -44,16 +44,16 @@ export function ProgramListPage() {
                 {program.weekCount} week{program.weekCount === 1 ? '' : 's'}
               </span>
             </Link>
-            <button
-              type="button"
+            <ConfirmLink
               className="min-h-11 shrink-0 text-xs text-red-300 sm:min-h-0"
-              onClick={async () => {
+              confirmLabel="Confirm delete"
+              onConfirm={async () => {
                 await api(`/api/programs/${program.id}`, { method: 'DELETE' })
                 load()
               }}
             >
               Delete
-            </button>
+            </ConfirmLink>
           </Card>
         ))}
         {programs.length === 0 && (

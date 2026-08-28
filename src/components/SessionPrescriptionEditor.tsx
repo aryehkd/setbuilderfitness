@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AddMovementSlot } from './AddMovementSlot.tsx'
-import { Button, Card, Field, NumericTextInput, Select, TextArea, TextInput } from './ui.tsx'
+import {
+  Button,
+  Card,
+  ConfirmButton,
+  Field,
+  NumericTextInput,
+  Select,
+  TextArea,
+  TextInput,
+} from './ui.tsx'
 import {
   ModeToggle,
   TempoFields,
@@ -13,23 +22,38 @@ import {
   allowsPerRepTempo,
   fallbackSetPrescription,
   movementDefaults,
+  quantityDefaultsForMethod,
   quantityLabel,
+  resettleSuperset,
   resizeSetPrescriptions,
   resizeTempoPerRep,
   showsRepsField,
   tempoRepCount,
 } from './WorkoutEditorUtils.ts'
 import { api } from '../lib/api.ts'
+import { MovementHistoryContext } from './MovementHistoryContext.tsx'
 import type {
   Equipment,
+  ExerciseHistoryEntry,
   ExerciseCategory,
   Movement,
+  MovementHistoryById,
   PrescribedExercise,
   Prescription,
   SetMethod,
   SetPrescription,
+  Tempo,
   TempoMode,
 } from '../../shared/types.ts'
+
+function defaultTempoParts(tempo?: Tempo | null) {
+  return [tempo?.eccentric, tempo?.pauseBottom, tempo?.concentric, tempo?.pauseTop]
+}
+
+function hasConfiguredTempo(ex: PrescribedExercise) {
+  if (ex.tempoMode === 'per_rep') return true
+  return defaultTempoParts(ex.tempo).some((part) => part != null)
+}
 
 function newExercise(movement: Movement): PrescribedExercise {
   const defaults = movementDefaults(movement)
@@ -63,11 +87,19 @@ export function SessionPrescriptionEditor({
   name,
   prescription,
   movements,
+  clientName,
+  movementHistory = {},
+  movementHistoryLoading = false,
+  movementHistoryError = null,
   onChange,
 }: {
   name: string
   prescription: Prescription
   movements: Movement[]
+  clientName?: string
+  movementHistory?: MovementHistoryById
+  movementHistoryLoading?: boolean
+  movementHistoryError?: string | null
   onChange: (next: { name: string; prescription: Prescription }) => void
 }) {
   const [openSlot, setOpenSlot] = useState<string | null>(null)
@@ -96,6 +128,16 @@ export function SessionPrescriptionEditor({
     exercises[index] = exercises[target]!
     exercises[target] = moving
     setPrescription({ ...prescription, exercises })
+  }
+  const removeExercise = (index: number) => {
+    const removed = prescription.exercises[index]
+    if (!removed) return
+    const removedGroup = removed.supersetGroup?.trim() || null
+    const remaining = prescription.exercises.filter((_, i) => i !== index)
+    setPrescription({
+      ...prescription,
+      exercises: removedGroup ? resettleSuperset(remaining, removedGroup) : remaining,
+    })
   }
   const insertExercise = (index: number, movement: Movement) => {
     const exercises = [...prescription.exercises]
@@ -169,14 +211,13 @@ export function SessionPrescriptionEditor({
               exercise={exercise}
               index={index}
               count={prescription.exercises.length}
+              clientName={clientName}
+              history={movementHistory[exercise.movementId]}
+              historyLoading={movementHistoryLoading}
+              historyError={movementHistoryError}
               onPatch={(patch) => patchExercise(index, patch)}
               onMove={(direction) => moveExercise(index, direction)}
-              onRemove={() =>
-                setPrescription({
-                  ...prescription,
-                  exercises: prescription.exercises.filter((_, i) => i !== index),
-                })
-              }
+              onRemove={() => removeExercise(index)}
             />
             {renderSlot(
               `after-${index}`,
@@ -196,6 +237,10 @@ function SessionExerciseEditor({
   exercise: ex,
   index,
   count,
+  clientName,
+  history,
+  historyLoading,
+  historyError,
   onPatch,
   onMove,
   onRemove,
@@ -203,10 +248,15 @@ function SessionExerciseEditor({
   exercise: PrescribedExercise
   index: number
   count: number
+  clientName?: string
+  history?: ExerciseHistoryEntry[]
+  historyLoading: boolean
+  historyError: string | null
   onPatch: (patch: Partial<PrescribedExercise>) => void
   onMove: (direction: -1 | 1) => void
   onRemove: () => void
 }) {
+  const [tempoOpen, setTempoOpen] = useState(() => hasConfiguredTempo(ex))
   const isRange = ex.method === 'reps_range'
   const showReps = showsRepsField(ex.method)
   const allowPerRep = allowsPerRepTempo(ex.method)
@@ -230,13 +280,8 @@ function SessionExerciseEditor({
   }
 
   const changeMethod = (method: SetMethod) => {
-    const patch: Partial<PrescribedExercise> = { method }
-    if (method === 'reps_range') {
-      patch.repsMax = ex.repsMax ?? ex.repsMin
-    } else {
-      patch.repsMax = null
-    }
-    if (method === 'timed' && ex.method !== 'timed') patch.repsMin = 30
+    const quantities = quantityDefaultsForMethod(method)
+    const patch: Partial<PrescribedExercise> = { method, ...quantities }
     if (!allowsPerRepTempo(method)) {
       patch.tempoMode = 'default'
       patch.tempoPerRep = []
@@ -244,6 +289,12 @@ function SessionExerciseEditor({
     if (!showsRepsField(method)) {
       patch.perSetEnabled = false
       patch.setPrescriptions = []
+    } else if (ex.perSetEnabled) {
+      patch.setPrescriptions = Array.from({ length: ex.setCount }, () => ({
+        repsMin: quantities.repsMin,
+        repsMax: quantities.repsMax,
+        loadPrescription: ex.loadPrescription,
+      }))
     }
     onPatch(patch)
   }
@@ -308,9 +359,9 @@ function SessionExerciseEditor({
           >
             Move down
           </Button>
-          <Button type="button" variant="danger" onClick={onRemove}>
+          <ConfirmButton onConfirm={onRemove} question="Remove this movement?">
             Remove
-          </Button>
+          </ConfirmButton>
         </div>
       </div>
 
@@ -355,6 +406,7 @@ function SessionExerciseEditor({
         {showReps && !isRange && (
           <Field label={quantityLabel(ex.method)}>
             <NumericTextInput
+              key={ex.method}
               value={ex.repsMin}
               onChange={(event) => onPatch({ repsMin: Number(event.target.value), repsMax: null })}
             />
@@ -364,12 +416,14 @@ function SessionExerciseEditor({
           <>
             <Field label="Reps min">
               <NumericTextInput
+                key={`${ex.method}-min`}
                 value={ex.repsMin}
                 onChange={(event) => onPatch({ repsMin: Number(event.target.value) })}
               />
             </Field>
             <Field label="Reps max">
               <NumericTextInput
+                key={`${ex.method}-max`}
                 value={ex.repsMax ?? ''}
                 onChange={(event) =>
                   onPatch({
@@ -402,6 +456,7 @@ function SessionExerciseEditor({
             <div key={setIndex} className="grid gap-3 border-b border-line pb-3 last:border-0 last:pb-0 sm:grid-cols-3">
               <Field label={`Set ${setIndex + 1} ${isRange ? 'min' : quantityLabel(ex.method)}`}>
                 <NumericTextInput
+                  key={`${ex.method}-${setIndex}-min`}
                   value={set.repsMin}
                   onChange={(event) => patchSet(setIndex, { repsMin: Number(event.target.value) })}
                 />
@@ -409,6 +464,7 @@ function SessionExerciseEditor({
               {isRange && (
                 <Field label="Max reps">
                   <NumericTextInput
+                    key={`${ex.method}-${setIndex}-max`}
                     value={set.repsMax ?? ''}
                     onChange={(event) =>
                       patchSet(setIndex, {
@@ -418,7 +474,7 @@ function SessionExerciseEditor({
                   />
                 </Field>
               )}
-              <Field label="Prescribed load (lb)">
+              <Field label="Prescribed load">
                 <TextInput
                   value={set.loadPrescription ?? ''}
                   onChange={(event) =>
@@ -430,55 +486,93 @@ function SessionExerciseEditor({
           ))}
         </div>
       ) : (
-        <Field label="Prescribed load (lb)">
+        <Field label="Prescribed load">
           <TextInput
             value={ex.loadPrescription ?? ''}
             onChange={(event) => onPatch({ loadPrescription: event.target.value || null })}
           />
         </Field>
       )}
+      <MovementHistoryContext
+        movementName={ex.movementName}
+        clientName={clientName}
+        entries={history}
+        loading={historyLoading}
+        error={historyError}
+        showSelectPrompt
+      />
 
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted">Tempo</p>
-          {allowPerRep && (
-            <ModeToggle
-              value={tempoMode}
-              options={[
-                { value: 'default' as const, label: 'Default' },
-                { value: 'per_rep' as const, label: 'Per rep' },
-              ]}
-              onChange={(mode) =>
-                onPatch(
-                  mode === 'per_rep'
-                    ? {
-                        tempoMode: mode,
-                        tempoPerRep: resizeTempoPerRep(ex.tempoPerRep, tempoRepCount(ex)),
-                      }
-                    : { tempoMode: mode, tempoPerRep: [] },
-                )
-              }
-            />
-          )}
-        </div>
-        {tempoMode === 'per_rep' && allowPerRep ? (
-          <div className="space-y-4">
-            {resizeTempoPerRep(ex.tempoPerRep, tempoRepCount(ex)).map((tempo, repIndex) => (
-              <div key={repIndex} className="space-y-2">
-                <p className="text-xs text-muted">Rep {repIndex + 1}</p>
-                <TempoFields
-                  value={tempo}
-                  onChange={(next) => {
-                    const tempos = resizeTempoPerRep(ex.tempoPerRep, tempoRepCount(ex))
-                    tempos[repIndex] = next
-                    onPatch({ tempoPerRep: tempos })
-                  }}
-                />
-              </div>
-            ))}
-          </div>
+      <div className="space-y-2">
+        {!tempoOpen ? (
+          <Button
+            type="button"
+            variant="ghost"
+            className="text-xs"
+            onClick={() => setTempoOpen(true)}
+          >
+            Configure tempo
+          </Button>
         ) : (
-          <TempoFields value={ex.tempo ?? {}} onChange={(tempo) => onPatch({ tempo })} />
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted">Tempo</p>
+                {allowPerRep && (
+                  <ModeToggle
+                    value={tempoMode}
+                    options={[
+                      { value: 'default' as const, label: 'Default' },
+                      { value: 'per_rep' as const, label: 'Per rep' },
+                    ]}
+                    onChange={(mode) =>
+                      onPatch(
+                        mode === 'per_rep'
+                          ? {
+                              tempoMode: mode,
+                              tempoPerRep: resizeTempoPerRep(ex.tempoPerRep, tempoRepCount(ex)),
+                            }
+                          : { tempoMode: mode, tempoPerRep: [] },
+                      )
+                    }
+                  />
+                )}
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                className="text-xs"
+                onClick={() => {
+                  setTempoOpen(false)
+                  onPatch({
+                    tempo: {},
+                    tempoMode: 'default',
+                    tempoPerRep: [],
+                  })
+                }}
+              >
+                Remove tempo
+              </Button>
+            </div>
+            {tempoMode === 'per_rep' && allowPerRep ? (
+              <div className="space-y-4">
+                {resizeTempoPerRep(ex.tempoPerRep, tempoRepCount(ex)).map((tempo, repIndex) => (
+                  <div key={repIndex} className="space-y-2">
+                    <p className="text-xs text-muted">Rep {repIndex + 1}</p>
+                    <TempoFields
+                      value={tempo}
+                      onChange={(next) => {
+                        const tempos = resizeTempoPerRep(ex.tempoPerRep, tempoRepCount(ex))
+                        tempos[repIndex] = next
+                        onPatch({ tempoPerRep: tempos })
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <TempoFields value={ex.tempo ?? {}} onChange={(tempo) => onPatch({ tempo })} />
+            )}
+          </>
         )}
       </div>
 

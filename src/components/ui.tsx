@@ -60,6 +60,105 @@ export function Field({
   )
 }
 
+/**
+ * Destructive action that asks for a second click before firing. Inline buttons
+ * are used instead of window.confirm because browsers can suppress repeated
+ * native dialogs, which silently turns the guard off.
+ */
+export function ConfirmButton({
+  onConfirm,
+  children,
+  confirmLabel = 'Confirm',
+  question,
+  className = '',
+  disabled = false,
+}: {
+  onConfirm: () => void
+  children: ReactNode
+  confirmLabel?: string
+  question?: string
+  className?: string
+  disabled?: boolean
+}) {
+  const [asking, setAsking] = useState(false)
+
+  if (!asking) {
+    return (
+      <Button
+        type="button"
+        variant="danger"
+        className={className}
+        disabled={disabled}
+        onClick={() => setAsking(true)}
+      >
+        {children}
+      </Button>
+    )
+  }
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      {question ? <span className="text-xs text-muted">{question}</span> : null}
+      <Button
+        type="button"
+        variant="danger"
+        className={className}
+        disabled={disabled}
+        onClick={() => {
+          setAsking(false)
+          onConfirm()
+        }}
+      >
+        {confirmLabel}
+      </Button>
+      <Button type="button" variant="ghost" className={className} onClick={() => setAsking(false)}>
+        Cancel
+      </Button>
+    </span>
+  )
+}
+
+/** Text-link flavoured counterpart to ConfirmButton for dense lists and grids. */
+export function ConfirmLink({
+  onConfirm,
+  children,
+  confirmLabel = 'Confirm',
+  className = '',
+}: {
+  onConfirm: () => void
+  children: ReactNode
+  confirmLabel?: string
+  className?: string
+}) {
+  const [asking, setAsking] = useState(false)
+
+  if (!asking) {
+    return (
+      <button type="button" className={className} onClick={() => setAsking(true)}>
+        {children}
+      </button>
+    )
+  }
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        className={className}
+        onClick={() => {
+          setAsking(false)
+          onConfirm()
+        }}
+      >
+        {confirmLabel}
+      </button>
+      <button type="button" className={`${className} text-muted`} onClick={() => setAsking(false)}>
+        Cancel
+      </button>
+    </span>
+  )
+}
+
 export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input

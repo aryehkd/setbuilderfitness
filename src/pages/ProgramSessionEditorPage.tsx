@@ -1,9 +1,19 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { SessionPrescriptionEditor } from '../components/SessionPrescriptionEditor.tsx'
+import { VersionHistory } from '../components/VersionHistory.tsx'
+import {
+  ClientHistorySelector,
+} from '../components/MovementHistoryContext.tsx'
+import { useMovementHistoryContext } from '../hooks/useMovementHistoryContext.ts'
 import { Button, Card } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
-import type { Movement, Prescription, ProgramSession } from '../../shared/types.ts'
+import type {
+  Movement,
+  Prescription,
+  ProgramSession,
+  TrainerClient,
+} from '../../shared/types.ts'
 
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
@@ -13,6 +23,8 @@ export function ProgramSessionEditorPage() {
   const [session, setSession] = useState<ProgramSession | null>(null)
   const [draft, setDraft] = useState<{ name: string; prescription: Prescription } | null>(null)
   const [movements, setMovements] = useState<Movement[]>([])
+  const [clients, setClients] = useState<TrainerClient[]>([])
+  const [selectedClientId, setSelectedClientId] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -29,7 +41,14 @@ export function ProgramSessionEditorPage() {
 
   useEffect(() => {
     void api<Movement[]>('/api/movements?q=').then(setMovements)
+    void api<TrainerClient[]>('/api/clients').then(setClients)
   }, [])
+
+  const selectedClient = clients.find((client) => client.id === selectedClientId)
+  const movementHistory = useMovementHistoryContext(
+    selectedClientId,
+    draft?.prescription.exercises.map((exercise) => exercise.movementId) ?? [],
+  )
 
   const save = async () => {
     if (!id || !sessionId || !draft) return
@@ -76,10 +95,24 @@ export function ProgramSessionEditorPage() {
           {saving ? 'Saving…' : 'Save changes'}
         </Button>
       </div>
+      <Card className="space-y-2">
+        <ClientHistorySelector
+          clients={clients}
+          value={selectedClientId}
+          onChange={setSelectedClientId}
+        />
+        <p className="text-xs text-muted">
+          This selection only adds coaching context. It does not assign the workout.
+        </p>
+      </Card>
       <SessionPrescriptionEditor
         name={draft.name}
         prescription={draft.prescription}
         movements={movements}
+        clientName={selectedClient?.name}
+        movementHistory={movementHistory.history}
+        movementHistoryLoading={movementHistory.loading}
+        movementHistoryError={movementHistory.error}
         onChange={setDraft}
       />
       {error && <p className="text-sm text-red-300">{error}</p>}
@@ -91,6 +124,7 @@ export function ProgramSessionEditorPage() {
           {saving ? 'Saving…' : 'Save changes'}
         </Button>
       </Card>
+      <VersionHistory events={session.versionHistory} />
     </div>
   )
 }

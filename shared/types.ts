@@ -145,6 +145,10 @@ export type TemplateExercise = {
   youtubeUrl: string | null
 }
 
+export type VersionHistoryEvent =
+  | { type: 'assigned'; name: string; at: string }
+  | { type: 'edit'; text: string; at: string }
+
 export type WorkoutTemplate = {
   id: string
   trainerId: string
@@ -154,6 +158,7 @@ export type WorkoutTemplate = {
   createdAt: string
   updatedAt: string
   exercises?: TemplateExercise[]
+  versionHistory?: VersionHistoryEvent[]
 }
 
 export type ProgramSession = {
@@ -164,6 +169,7 @@ export type ProgramSession = {
   weekIndex: number
   weekday: number
   prescription: Prescription
+  versionHistory?: VersionHistoryEvent[]
 }
 
 export type Program = {
@@ -185,6 +191,10 @@ export type SetLog = {
   completed: boolean
 }
 
+export function setLogIsCompleted(log: Pick<SetLog, 'weight' | 'reps'>) {
+  return log.weight != null || log.reps != null
+}
+
 export type Session = {
   id: string
   clientId: string
@@ -198,6 +208,7 @@ export type Session = {
   completedAt: string | null
   logs: SetLog[]
   clientName?: string
+  versionHistory?: VersionHistoryEvent[]
 }
 
 export type MeResponse = {
@@ -251,12 +262,15 @@ export type ActivityDay = {
 }
 
 export type ExerciseHistoryEntry = {
+  sessionId: string
   date: string
   sessionName: string
   setIndex: number
   weight: number | null
   reps: number | null
 }
+
+export type MovementHistoryById = Record<string, ExerciseHistoryEntry[]>
 
 export type LoggedMovement = {
   id: string
