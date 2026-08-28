@@ -358,12 +358,63 @@ function loadSummary(ex: TemplateExercise) {
   return 'Custom sets'
 }
 
+function BlockDragHelp() {
+  const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null)
+
+  const show = (event: { currentTarget: HTMLElement }) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    setAnchor({ left: rect.left, top: rect.bottom + 8 })
+  }
+
+  return (
+    <span className="inline-flex">
+      <button
+        type="button"
+        aria-label="How dragging blocks works"
+        className="flex h-4 w-4 items-center justify-center rounded-full border border-line text-[10px] leading-none text-muted hover:border-muted hover:text-white"
+        onMouseEnter={show}
+        onMouseLeave={() => setAnchor(null)}
+        onFocus={show}
+        onBlur={() => setAnchor(null)}
+      >
+        i
+      </button>
+      {anchor ? (
+        <span
+          role="tooltip"
+          style={{ left: anchor.left, top: anchor.top }}
+          className="pointer-events-none fixed z-30 w-72 rounded-xl border border-line bg-ink p-3 text-[11px] font-normal normal-case leading-relaxed tracking-normal text-muted shadow-lg"
+        >
+          Drag a movement by its handle, then drop it on:
+          <span className="mt-2 block">
+            <span className="block">
+              <strong className="text-white">A line</strong> to move it there. Dragging a
+              superset&rsquo;s first movement moves the whole group.
+            </span>
+            <span className="mt-1 block">
+              <strong className="text-white">Another movement</strong> to superset them; the
+              highlighted letter previews the result.
+            </span>
+            <span className="mt-1 block">
+              Leaving a superset drops the movement out of it, and a group left with one
+              movement becomes a single again.
+            </span>
+          </span>
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
 export function TemplateEditorPage() {
   const { id } = useParams()
   const [template, setTemplate] = useState<WorkoutTemplate | null>(null)
   const [movements, setMovements] = useState<Movement[]>([])
   const [openSlot, setOpenSlot] = useState<string | null>(null)
-  const [view, setView] = useState<EditorView>('edit')
+  const [requestedView, setView] = useState<EditorView>('edit')
+  const [tableAllowed, setTableAllowed] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches,
+  )
   const [expandedExerciseId, setExpandedExerciseId] = useState<string | null>(null)
   const [draggedExerciseId, setDraggedExerciseId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<ExerciseDropTarget | null>(null)
@@ -382,6 +433,17 @@ export function TemplateEditorPage() {
   useEffect(() => {
     void api<Movement[]>('/api/movements?q=').then(setMovements)
   }, [])
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1024px)')
+    const sync = () => setTableAllowed(media.matches)
+    sync()
+    media.addEventListener('change', sync)
+    return () => media.removeEventListener('change', sync)
+  }, [])
+
+  const view: EditorView =
+    requestedView === 'compact' && !tableAllowed ? 'edit' : requestedView
 
   const exercises = useMemo(() => template?.exercises ?? [], [template])
   const blocks = useMemo(() => exerciseBlocks(exercises), [exercises])
@@ -646,7 +708,7 @@ export function TemplateEditorPage() {
           value={view}
           options={[
             { value: 'edit' as const, label: 'Edit' },
-            { value: 'compact' as const, label: 'Table' },
+            ...(tableAllowed ? [{ value: 'compact' as const, label: 'Table' }] : []),
             { value: 'preview' as const, label: 'Client view' },
           ]}
           onChange={setView}
@@ -796,7 +858,12 @@ export function TemplateEditorPage() {
             <table className="w-full min-w-[72rem] border-collapse text-left text-sm">
               <thead className="bg-ink text-xs uppercase tracking-wide text-muted">
                 <tr>
-                  <th className="w-28 px-3 py-3 font-medium">Block</th>
+                  <th className="relative w-28 px-3 py-3 font-medium">
+                    <span className="flex items-center gap-1.5">
+                      Block
+                      <BlockDragHelp />
+                    </span>
+                  </th>
                   <th className="min-w-56 px-3 py-3 font-medium">Movement</th>
                   <th className="w-36 px-3 py-3 font-medium">Summary</th>
                   <th className="w-44 px-3 py-3 font-medium">Load (lb)</th>
