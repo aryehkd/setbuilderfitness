@@ -44,8 +44,11 @@ import {
 } from '../components/PrescribedExerciseCard.tsx'
 import {
   ModeToggle,
+  SaveDefaultButton,
   TempoFields,
   Toggle,
+  clearCompletedDefaultSaves,
+  type SaveDefaultStatus,
 } from '../components/WorkoutEditorControls.tsx'
 import {
   CATEGORIES,
@@ -61,6 +64,8 @@ import {
   resizeTempoPerRep,
   showsRepsField,
   tempoRepCount,
+  placeInSupersetOrder,
+  supersetOrderOptions,
 } from '../components/WorkoutEditorUtils.ts'
 
 function emptyExercise(movement: Movement): Partial<TemplateExercise> {
@@ -470,6 +475,13 @@ export function TemplateEditorPage() {
   const [draggedExerciseId, setDraggedExerciseId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<ExerciseDropTarget | null>(null)
   const [saving, setSaving] = useState(false)
+  const [defaultSaveStatus, setDefaultSaveStatus] = useState<Record<string, SaveDefaultStatus>>(
+    {},
+  )
+
+  const noteWorkoutEdited = () => {
+    setDefaultSaveStatus(clearCompletedDefaultSaves)
+  }
 
   const load = async () => {
     if (!id) return
@@ -543,6 +555,7 @@ export function TemplateEditorPage() {
     const oldGroup = supersetGroupKey(current)
     if (oldGroup === group) return
 
+    noteWorkoutEdited()
     setSaving(true)
     try {
       const members = exerciseBlocks(exercises)
@@ -600,6 +613,7 @@ export function TemplateEditorPage() {
 
   const addExerciseAt = async (movement: Movement, slot: InsertSlot) => {
     if (!id) return
+    noteWorkoutEdited()
     setSaving(true)
     try {
       const selectedMovement = await materializeMovement(movement)
@@ -657,30 +671,41 @@ export function TemplateEditorPage() {
   }
 
   const saveMovementDefault = async (ex: TemplateExercise) => {
-    const claimed = await api<Movement>(
-      `/api/movements/${ex.movementId}/defaults`,
-      {
-        method: 'PUT',
-        body: JSON.stringify(defaultsFromTemplateExercise(ex)),
-      },
-    )
-    setMovements((current) =>
-      replaceCatalogMovement(current, { id: ex.movementId, sourceExerciseId: claimed.sourceExerciseId }, claimed),
-    )
-    if (
-      claimed.id !== ex.movementId ||
-      (claimed.savedDefaults?.variantId && claimed.savedDefaults.variantId !== ex.variantId)
-    ) {
-      await saveExercise({
-        ...ex,
-        movementId: claimed.id,
-        variantId: claimed.savedDefaults?.variantId ?? ex.variantId,
+    setDefaultSaveStatus((current) => ({ ...current, [ex.id]: 'saving' }))
+    try {
+      const claimed = await api<Movement>(
+        `/api/movements/${ex.movementId}/defaults`,
+        {
+          method: 'PUT',
+          body: JSON.stringify(defaultsFromTemplateExercise(ex)),
+        },
+      )
+      setMovements((current) =>
+        replaceCatalogMovement(current, { id: ex.movementId, sourceExerciseId: claimed.sourceExerciseId }, claimed),
+      )
+      if (
+        claimed.id !== ex.movementId ||
+        (claimed.savedDefaults?.variantId && claimed.savedDefaults.variantId !== ex.variantId)
+      ) {
+        await saveExercise({
+          ...ex,
+          movementId: claimed.id,
+          variantId: claimed.savedDefaults?.variantId ?? ex.variantId,
+        })
+      }
+      setDefaultSaveStatus((current) => ({ ...current, [ex.id]: 'saved' }))
+    } catch {
+      setDefaultSaveStatus((current) => {
+        const next = { ...current }
+        delete next[ex.id]
+        return next
       })
     }
   }
 
   const patchExercise = (exerciseId: string, patch: Partial<TemplateExercise>, persist = false) => {
     if (!template) return
+    noteWorkoutEdited()
     const nextExercises = (template.exercises ?? []).map((item) =>
       item.id === exerciseId ? { ...item, ...patch } : item,
     )
@@ -695,6 +720,7 @@ export function TemplateEditorPage() {
     if (!id) return
     const removed = exercises.find((exercise) => exercise.id === exerciseId)
     if (!removed) return
+    noteWorkoutEdited()
     const removedGroup = supersetGroupKey(removed)
     setSaving(true)
     try {
@@ -727,6 +753,7 @@ export function TemplateEditorPage() {
   const moveBlockTo = async (blockIndex: number, target: number) => {
     if (!id || !template) return
     if (target < 0 || target >= blocks.length || target === blockIndex) return
+    noteWorkoutEdited()
     const nextBlocks = [...blocks]
     const [moving] = nextBlocks.splice(blockIndex, 1)
     if (!moving) return
@@ -759,6 +786,7 @@ export function TemplateEditorPage() {
     })
     if (unchanged) return
 
+    noteWorkoutEdited()
     setSaving(true)
     try {
       const updated = await api<WorkoutTemplate>(`/api/templates/${id}/exercises/reorder`, {
@@ -789,6 +817,12 @@ export function TemplateEditorPage() {
     void saveExerciseArrangement(nextExercises)
     setDraggedExerciseId(null)
     setDropTarget(null)
+  }
+
+  const changeSupersetOrder = (exerciseId: string, order: number) => {
+    const index = visibleExercises.findIndex((item) => item.id === exerciseId)
+    if (index < 0) return
+    void saveExerciseArrangement(placeInSupersetOrder(visibleExercises, index, order))
   }
 
   const renderSlot = (slot: InsertSlot, label: string) => (
@@ -846,7 +880,10 @@ export function TemplateEditorPage() {
       ) : (
         <TextInput
           value={template.name}
-          onChange={(e) => setTemplate({ ...template, name: e.target.value })}
+          onChange={(e) => {
+            noteWorkoutEdited()
+            setTemplate({ ...template, name: e.target.value })
+          }}
           onBlur={() => void saveMeta({ name: template.name })}
           className="min-w-0 flex-1 font-display text-2xl font-bold"
         />
@@ -1000,7 +1037,10 @@ export function TemplateEditorPage() {
             <TextArea
               rows={3}
               value={warmup}
-              onChange={(e) => setTemplate({ ...template, warmup: e.target.value })}
+              onChange={(e) => {
+                noteWorkoutEdited()
+                setTemplate({ ...template, warmup: e.target.value })
+              }}
               onBlur={() => void saveMeta({ warmup })}
             />
           </Card>
@@ -1019,7 +1059,7 @@ export function TemplateEditorPage() {
                   </th>
                   <th className="min-w-56 px-3 py-3 font-medium">Movement</th>
                   <th className="w-36 px-3 py-3 font-medium">Summary</th>
-                  <th className="w-72 px-3 py-3 font-medium">Load (lb)</th>
+                  <th className="w-72 px-3 py-3 font-medium">Load</th>
                   <th className="w-32 px-3 py-3 font-medium">Tempo</th>
                   <th className="w-28 px-3 py-3 font-medium">Rest (s)</th>
                   <th className="min-w-56 px-3 py-3 font-medium">Notes</th>
@@ -1228,12 +1268,15 @@ export function TemplateEditorPage() {
                                 index={blockStart + offset}
                                 nextGroup={nextGroup}
                                 existingGroups={existingGroups}
+                                groupSize={block.length}
                                 reorderControls={null}
                                 onPatch={patchExercise}
                                 onAssignSuperset={(groupName) =>
                                   void assignSuperset(ex.id, groupName)
                                 }
+                                onSupersetOrder={(order) => changeSupersetOrder(ex.id, order)}
                                 onSaveDefault={() => void saveMovementDefault(ex)}
+                                saveDefaultStatus={defaultSaveStatus[ex.id] ?? 'idle'}
                                 onRemove={() => void removeExercise(ex.id)}
                               />
                             </td>
@@ -1282,7 +1325,10 @@ export function TemplateEditorPage() {
         <TextArea
           rows={3}
           value={warmup}
-          onChange={(e) => setTemplate({ ...template, warmup: e.target.value })}
+          onChange={(e) => {
+            noteWorkoutEdited()
+            setTemplate({ ...template, warmup: e.target.value })
+          }}
           onBlur={() => void saveMeta({ warmup })}
         />
       </Card>
@@ -1332,6 +1378,7 @@ export function TemplateEditorPage() {
                 index={blockStart + offset}
                 nextGroup={nextGroup}
                 existingGroups={existingGroups}
+                groupSize={block.length}
                 reorderControls={group ? null : reorderButtons}
                 historyContext={
                   <>
@@ -1346,7 +1393,9 @@ export function TemplateEditorPage() {
                 }
                 onPatch={patchExercise}
                 onAssignSuperset={(groupName) => void assignSuperset(ex.id, groupName)}
+                onSupersetOrder={(order) => changeSupersetOrder(ex.id, order)}
                 onSaveDefault={() => void saveMovementDefault(ex)}
+                saveDefaultStatus={defaultSaveStatus[ex.id] ?? 'idle'}
                 onRemove={() => void removeExercise(ex.id)}
               />
               {group &&
@@ -1394,22 +1443,28 @@ function ExerciseCard({
   index,
   nextGroup,
   existingGroups,
+  groupSize,
   reorderControls,
   historyContext,
   onPatch,
   onAssignSuperset,
+  onSupersetOrder,
   onSaveDefault,
+  saveDefaultStatus = 'idle',
   onRemove,
 }: {
   exercise: TemplateExercise
   index: number
   nextGroup: string
   existingGroups: string[]
+  groupSize: number
   reorderControls: ReactNode
   historyContext?: ReactNode
   onPatch: (id: string, patch: Partial<TemplateExercise>, persist?: boolean) => void
   onAssignSuperset: (group: string | null) => void
+  onSupersetOrder: (order: number) => void
   onSaveDefault: () => void
+  saveDefaultStatus?: SaveDefaultStatus
   onRemove: () => void
 }) {
   const [tempoOpen, setTempoOpen] = useState(() => hasConfiguredTempo(ex))
@@ -1533,9 +1588,7 @@ function ExerciseCard({
         </div>
         <div className="flex flex-wrap gap-2 sm:justify-end">
           {reorderControls}
-          <Button variant="ghost" onClick={onSaveDefault}>
-            save config as default
-          </Button>
+          <SaveDefaultButton status={saveDefaultStatus} onClick={onSaveDefault} />
           <ConfirmButton onConfirm={onRemove} question="Remove this movement?">
             Remove
           </ConfirmButton>
@@ -1873,21 +1926,16 @@ function ExerciseCard({
               </Select>
             </Field>
             <Field label="Order in group">
-              <NumericTextInput
-                value={ex.supersetOrder ?? ''}
-                onChange={(e) =>
-                  onPatch(ex.id, {
-                    supersetOrder: e.target.value ? Number(e.target.value) : null,
-                  })
-                }
-                onBlur={(e) =>
-                  onPatch(
-                    ex.id,
-                    { supersetOrder: e.target.value ? Number(e.target.value) : null },
-                    true,
-                  )
-                }
-              />
+              <Select
+                value={String(ex.supersetOrder ?? 1)}
+                onChange={(e) => onSupersetOrder(Number(e.target.value))}
+              >
+                {supersetOrderOptions(groupSize, ex.supersetOrder).map((order) => (
+                  <option key={order} value={order}>
+                    {order}
+                  </option>
+                ))}
+              </Select>
             </Field>
           </div>
         )}

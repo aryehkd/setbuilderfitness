@@ -161,6 +161,187 @@ export function resizeSetPrescriptions(
 
 type SupersetMember = { supersetGroup?: string | null; supersetOrder?: number | null }
 
+export function supersetGroupKey(exercise: SupersetMember) {
+  const key = exercise.supersetGroup?.trim()
+  return key || null
+}
+
+export function nextSupersetGroup(exercises: SupersetMember[]) {
+  const used = new Set(
+    exercises
+      .map((exercise) => exercise.supersetGroup?.trim())
+      .filter((key): key is string => Boolean(key)),
+  )
+  for (let i = 0; i < 26; i++) {
+    const letter = String.fromCharCode(65 + i)
+    if (!used.has(letter)) return letter
+  }
+  let n = 2
+  while (used.has(`A${n}`)) n += 1
+  return `A${n}`
+}
+
+export function exerciseBlocks<T extends SupersetMember>(exercises: T[]): T[][] {
+  const membersByGroup = new Map<string, T[]>()
+  for (let index = 0; index < exercises.length; index++) {
+    const exercise = exercises[index]!
+    const key = supersetGroupKey(exercise)
+    if (!key) continue
+    const list = membersByGroup.get(key) ?? []
+    list.push(exercise)
+    membersByGroup.set(key, list)
+  }
+  for (const [key, members] of membersByGroup) {
+    members.sort((a, b) => {
+      const order = (a.supersetOrder ?? 0) - (b.supersetOrder ?? 0)
+      if (order !== 0) return order
+      return exercises.indexOf(a) - exercises.indexOf(b)
+    })
+    membersByGroup.set(key, members)
+  }
+
+  const seenGroups = new Set<string>()
+  const blocks: T[][] = []
+  for (const exercise of exercises) {
+    const key = supersetGroupKey(exercise)
+    if (!key) {
+      blocks.push([exercise])
+      continue
+    }
+    if (seenGroups.has(key)) continue
+    seenGroups.add(key)
+    blocks.push(membersByGroup.get(key) ?? [exercise])
+  }
+  return blocks
+}
+
+export type ExerciseDropTarget = { kind: 'line'; index: number } | { kind: 'row'; index: number }
+
+export function normalizeSupersets<T extends SupersetMember>(exercises: T[]): T[] {
+  const groupCounts = new Map<string, number>()
+  for (const exercise of exercises) {
+    const group = supersetGroupKey(exercise)
+    if (group) groupCounts.set(group, (groupCounts.get(group) ?? 0) + 1)
+  }
+  const groupOrders = new Map<string, number>()
+  return exercises.map((exercise) => {
+    const group = supersetGroupKey(exercise)
+    if (!group || (groupCounts.get(group) ?? 0) < 2) {
+      return { ...exercise, supersetGroup: null, supersetOrder: null }
+    }
+    const order = (groupOrders.get(group) ?? 0) + 1
+    groupOrders.set(group, order)
+    return { ...exercise, supersetGroup: group, supersetOrder: order }
+  })
+}
+
+function moveExercisesToLine<T>(exercises: T[], movingIndexes: number[], lineIndex: number) {
+  const movingSet = new Set(movingIndexes)
+  const moving = movingIndexes
+    .slice()
+    .sort((a, b) => a - b)
+    .map((index) => exercises[index]!)
+  const removedBeforeLine = exercises
+    .slice(0, lineIndex)
+    .filter((_, index) => movingSet.has(index)).length
+  const remaining = exercises.filter((_, index) => !movingSet.has(index))
+  const insertionIndex = Math.max(0, Math.min(remaining.length, lineIndex - removedBeforeLine))
+  remaining.splice(insertionIndex, 0, ...moving)
+  return remaining
+}
+
+function moveExercisesAfter<T>(exercises: T[], movingIndexes: number[], targetIndex: number) {
+  const movingSet = new Set(movingIndexes)
+  const target = exercises[targetIndex]
+  if (!target || movingSet.has(targetIndex)) return exercises
+  const moving = movingIndexes
+    .slice()
+    .sort((a, b) => a - b)
+    .map((index) => exercises[index]!)
+  const remaining = exercises.filter((_, index) => !movingSet.has(index))
+  const nextTargetIndex = remaining.indexOf(target)
+  if (nextTargetIndex === -1) return exercises
+  remaining.splice(nextTargetIndex + 1, 0, ...moving)
+  return remaining
+}
+
+export function arrangeExerciseDrop<T extends SupersetMember>(
+  exercises: T[],
+  draggedIndex: number,
+  target: ExerciseDropTarget,
+  newGroup: string,
+) {
+  const dragged = exercises[draggedIndex]
+  if (!dragged) return exercises
+  if (target.kind === 'row' && target.index === draggedIndex) return exercises
+
+  const arranged = exercises.map((exercise) => ({ ...exercise }))
+  const sourceGroup = supersetGroupKey(arranged[draggedIndex]!)
+  const sourceMembers = sourceGroup
+    ? arranged
+        .map((exercise, index) => ({ exercise, index }))
+        .filter(({ exercise }) => supersetGroupKey(exercise) === sourceGroup)
+    : [{ exercise: arranged[draggedIndex]!, index: draggedIndex }]
+  const sourceIsFirst = Boolean(sourceGroup && sourceMembers[0]?.index === draggedIndex)
+  let movingIndexes = sourceIsFirst ? sourceMembers.map(({ index }) => index) : [draggedIndex]
+
+  if (target.kind === 'line') {
+    const leftGroup = target.index > 0 ? supersetGroupKey(arranged[target.index - 1]!) : null
+    const rightGroup =
+      target.index < arranged.length ? supersetGroupKey(arranged[target.index]!) : null
+    const targetGroup = leftGroup && leftGroup === rightGroup ? leftGroup : null
+
+    if (targetGroup === sourceGroup) {
+      movingIndexes = [draggedIndex]
+    } else if (targetGroup) {
+      const movingSet = new Set(movingIndexes)
+      for (let index = 0; index < arranged.length; index++) {
+        if (movingSet.has(index)) arranged[index] = { ...arranged[index]!, supersetGroup: targetGroup }
+      }
+    } else if (!sourceIsFirst) {
+      arranged[draggedIndex] = {
+        ...arranged[draggedIndex]!,
+        supersetGroup: null,
+        supersetOrder: null,
+      }
+    }
+
+    return normalizeSupersets(moveExercisesToLine(arranged, movingIndexes, target.index))
+  }
+
+  const targetExercise = arranged[target.index]
+  if (!targetExercise) return exercises
+  const targetGroup = supersetGroupKey(targetExercise)
+
+  if (targetGroup === sourceGroup && sourceGroup) {
+    return normalizeSupersets(moveExercisesAfter(arranged, [draggedIndex], target.index))
+  }
+
+  const destinationGroup = targetGroup ?? newGroup
+  const movingSet = new Set(movingIndexes)
+  for (let index = 0; index < arranged.length; index++) {
+    if (index === target.index || movingSet.has(index)) {
+      arranged[index] = { ...arranged[index]!, supersetGroup: destinationGroup }
+    }
+  }
+  return normalizeSupersets(moveExercisesAfter(arranged, movingIndexes, target.index))
+}
+
+export function moveExerciseBlock<T extends SupersetMember>(
+  exercises: T[],
+  blockIndex: number,
+  direction: -1 | 1,
+) {
+  const blocks = exerciseBlocks(exercises)
+  const target = blockIndex + direction
+  if (target < 0 || target >= blocks.length) return exercises
+  const nextBlocks = [...blocks]
+  const [moving] = nextBlocks.splice(blockIndex, 1)
+  if (!moving) return exercises
+  nextBlocks.splice(target, 0, moving)
+  return normalizeSupersets(nextBlocks.flat())
+}
+
 /**
  * Renumbers one superset in list order, dissolving it when fewer than two
  * movements are left. Returns the original array when nothing changes so
@@ -186,4 +367,48 @@ export function resettleSuperset<T extends SupersetMember>(exercises: T[], group
     )
   })
   return changed ? next : exercises
+}
+
+/**
+ * Moves one superset member to `nextOrder` (1-based) and renumbers the rest.
+ * Members stay in the same list slots so the group remains contiguous.
+ */
+export function placeInSupersetOrder<T extends SupersetMember>(
+  exercises: T[],
+  index: number,
+  nextOrder: number,
+): T[] {
+  const current = exercises[index]
+  const group = current?.supersetGroup?.trim()
+  if (!current || !group) return exercises
+
+  const memberIndexes = exercises
+    .map((_, memberIndex) => memberIndex)
+    .filter((memberIndex) => exercises[memberIndex]!.supersetGroup?.trim() === group)
+  memberIndexes.sort(
+    (a, b) =>
+      (exercises[a]!.supersetOrder ?? 0) - (exercises[b]!.supersetOrder ?? 0) || a - b,
+  )
+  if (current.supersetOrder === nextOrder && memberIndexes[nextOrder - 1] === index) {
+    return exercises
+  }
+
+  const without = memberIndexes.filter((memberIndex) => memberIndex !== index)
+  const clamped = Math.min(Math.max(1, nextOrder), without.length + 1)
+  const ordered = [...without]
+  ordered.splice(clamped - 1, 0, index)
+  const slots = [...memberIndexes].sort((a, b) => a - b)
+  const next = [...exercises]
+  ordered.forEach((fromIndex, position) => {
+    next[slots[position]!] = {
+      ...exercises[fromIndex]!,
+      supersetOrder: position + 1,
+    }
+  })
+  return next
+}
+
+export function supersetOrderOptions(groupSize: number, current: number | null) {
+  const size = Math.max(groupSize, current ?? 1, 1)
+  return Array.from({ length: size }, (_, index) => index + 1)
 }

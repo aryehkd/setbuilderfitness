@@ -8,7 +8,10 @@ import {
   groupBySuperset,
   setTarget,
 } from '../components/PrescribedExerciseCard.tsx'
-import { SessionPrescriptionEditor } from '../components/SessionPrescriptionEditor.tsx'
+import {
+  SessionPrescriptionEditor,
+  SessionPrescriptionTable,
+} from '../components/SessionPrescriptionEditor.tsx'
 import { VersionHistory } from '../components/VersionHistory.tsx'
 import { ModeToggle } from '../components/WorkoutEditorControls.tsx'
 import { useMovementHistoryContext } from '../hooks/useMovementHistoryContext.ts'
@@ -23,7 +26,7 @@ import type {
 } from '../../shared/types.ts'
 import { setLogIsCompleted, warmupToText } from '../../shared/types.ts'
 
-type TrainerMode = 'workout' | 'log'
+type TrainerMode = 'cards' | 'table' | 'log'
 
 export function SessionDetailPage() {
   const { id } = useParams()
@@ -35,7 +38,7 @@ export function SessionDetailPage() {
   const [historyFor, setHistoryFor] = useState<string | null>(null)
   const [history, setHistory] = useState<ExerciseHistoryEntry[]>([])
   const [editing, setEditing] = useState(false)
-  const [trainerMode, setTrainerMode] = useState<TrainerMode>('workout')
+  const [trainerMode, setTrainerMode] = useState<TrainerMode>('cards')
   const [draft, setDraft] = useState<{ name: string; prescription: Prescription } | null>(null)
   const [movements, setMovements] = useState<Movement[]>([])
   const [savingAssignment, setSavingAssignment] = useState(false)
@@ -61,7 +64,7 @@ export function SessionDetailPage() {
       data.loggedDurationSeconds ? String(Math.round(data.loggedDurationSeconds / 60)) : '',
     )
     if (me?.user.role !== 'client') {
-      setTrainerMode(data.logs.length > 0 ? 'log' : 'workout')
+      setTrainerMode(data.logs.length > 0 ? 'log' : 'cards')
     }
   }
 
@@ -167,76 +170,9 @@ export function SessionDetailPage() {
   const assignmentEditable =
     !isClient && session.status === 'assigned' && session.logs.length === 0
   const canLog = isClient || trainerMode === 'log'
-
-  if (editing && draft) {
-    return (
-      <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-sm text-muted">
-              {session.scheduledDate}
-              {session.clientName ? ` · ${session.clientName}` : ''}
-            </p>
-            <h1 className="break-words font-display text-2xl font-bold sm:text-3xl">
-              Edit assigned workout
-            </h1>
-            <p className="text-sm text-muted">
-              These changes apply only to this client&apos;s assigned workout.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={savingAssignment}
-              onClick={cancelEditing}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={savingAssignment || !draft.name.trim()}
-              onClick={() => void saveAssignment()}
-            >
-              {savingAssignment ? 'Saving…' : 'Save changes'}
-            </Button>
-          </div>
-        </div>
-
-        <SessionPrescriptionEditor
-          name={draft.name}
-          prescription={draft.prescription}
-          movements={movements}
-          clientName={session.clientName || 'Client'}
-          movementHistory={assignmentHistory.history}
-          movementHistoryLoading={assignmentHistory.loading}
-          movementHistoryError={assignmentHistory.error}
-          onChange={setDraft}
-        />
-
-        {editError && <p className="text-sm text-red-300">{editError}</p>}
-        <Card className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={savingAssignment}
-            onClick={cancelEditing}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            disabled={savingAssignment || !draft.name.trim()}
-            onClick={() => void saveAssignment()}
-          >
-            {savingAssignment ? 'Saving…' : 'Save changes'}
-          </Button>
-        </Card>
-        <VersionHistory events={session.versionHistory} />
-      </div>
-    )
-  }
-
+  const shownName = editing && draft ? draft.name : session.name
+  const shownPrescription =
+    editing && draft ? draft.prescription : session.prescription
   const warmup = warmupToText(session.prescription.warmup)
 
   return (
@@ -247,15 +183,41 @@ export function SessionDetailPage() {
             {session.scheduledDate}
             {!isClient && session.clientName ? ` · ${session.clientName}` : ''}
           </p>
-          <h1 className="break-words font-display text-2xl font-bold sm:text-3xl">{session.name}</h1>
+          <h1 className="break-words font-display text-2xl font-bold sm:text-3xl">
+            {shownName}
+          </h1>
           <p className="text-xs uppercase text-muted">{session.status}</p>
+          {editing ? (
+            <p className="text-sm text-muted">
+              Editing this client&apos;s assigned copy only.
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
-          {assignmentEditable && trainerMode === 'workout' && (
+          {assignmentEditable && trainerMode !== 'log' && !editing ? (
             <Button type="button" onClick={() => void startEditing()}>
               Edit assigned workout
             </Button>
-          )}
+          ) : null}
+          {editing && draft ? (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={savingAssignment}
+                onClick={cancelEditing}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={savingAssignment || !draft.name.trim()}
+                onClick={() => void saveAssignment()}
+              >
+                {savingAssignment ? 'Saving…' : 'Save changes'}
+              </Button>
+            </>
+          ) : null}
           <Button
             type="button"
             variant="ghost"
@@ -270,31 +232,63 @@ export function SessionDetailPage() {
         <ModeToggle
           value={trainerMode}
           options={[
-            { value: 'workout', label: 'Workout' },
+            { value: 'cards', label: 'Card' },
+            { value: 'table', label: 'Table' },
             { value: 'log', label: 'Log results' },
           ]}
-          onChange={setTrainerMode}
+          onChange={(mode) => {
+            if (editing && mode === 'log') cancelEditing()
+            setTrainerMode(mode)
+          }}
         />
       ) : null}
 
-      {!isClient && trainerMode === 'workout' && !assignmentEditable && (
+      {!isClient && trainerMode !== 'log' && !assignmentEditable ? (
         <Card>
           <p className="text-sm text-muted">
             This assigned workout is locked because logging has started or the session is no longer
             assigned.
           </p>
         </Card>
-      )}
+      ) : null}
       {!editing && editError && <p className="text-sm text-red-300">{editError}</p>}
 
-      {warmup ? (
+      {!isClient && trainerMode === 'cards' ? (
+        <SessionPrescriptionEditor
+          name={shownName}
+          prescription={shownPrescription}
+          movements={movements}
+          clientName={session.clientName || 'Client'}
+          movementHistory={assignmentHistory.history}
+          movementHistoryLoading={assignmentHistory.loading}
+          movementHistoryError={assignmentHistory.error}
+          readOnly={!editing}
+          onChange={(next) => {
+            if (editing) setDraft(next)
+          }}
+        />
+      ) : null}
+
+      {!isClient && trainerMode === 'table' ? (
+        <SessionPrescriptionTable
+          name={shownName}
+          prescription={shownPrescription}
+          readOnly={!editing}
+          onChange={(next) => {
+            if (editing) setDraft(next)
+          }}
+        />
+      ) : null}
+
+      {(isClient || trainerMode === 'log') && warmup ? (
         <Card>
           <h2 className="mb-2 font-semibold">Warmup</h2>
           <p className="whitespace-pre-wrap text-sm">{warmup}</p>
         </Card>
       ) : null}
 
-      {groupBySuperset(session.prescription.exercises).map((block) => {
+      {(isClient || trainerMode === 'log') &&
+        groupBySuperset(session.prescription.exercises).map((block) => {
         const cards = block.items.map(({ exercise: ex, index: exerciseIndex }) => (
           <Fragment key={exerciseIndex}>
             <PrescribedExerciseCard
@@ -376,7 +370,7 @@ export function SessionDetailPage() {
             {cards}
           </SupersetFrame>
         )
-      })}
+        })}
 
       {canLog && (
         <Card className="space-y-3">
@@ -393,7 +387,7 @@ export function SessionDetailPage() {
           </div>
         </Card>
       )}
-      {!isClient && trainerMode === 'workout' ? (
+      {!isClient && trainerMode !== 'log' ? (
         <VersionHistory events={session.versionHistory} />
       ) : null}
     </div>

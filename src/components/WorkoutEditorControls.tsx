@@ -1,5 +1,84 @@
-import { Field, NumericTextInput } from './ui.tsx'
+import { useState } from 'react'
+import { Field, NumericTextInput, Button } from './ui.tsx'
 import type { Tempo } from '../../shared/types.ts'
+
+export type SaveDefaultStatus = 'idle' | 'saving' | 'saved'
+
+export function clearCompletedDefaultSaves(
+  current: Record<string, SaveDefaultStatus>,
+): Record<string, SaveDefaultStatus> {
+  let changed = false
+  const next: Record<string, SaveDefaultStatus> = {}
+  for (const [key, status] of Object.entries(current)) {
+    if (status === 'saving') next[key] = 'saving'
+    else changed = true
+  }
+  return changed ? next : current
+}
+
+function SpinnerIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      className="h-4 w-4 shrink-0 animate-spin"
+      aria-hidden="true"
+    >
+      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
+      <path
+        d="M17 10a7 7 0 0 0-7-7"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      className="h-4 w-4 shrink-0 text-lime"
+      aria-hidden="true"
+    >
+      <path
+        d="M4.5 10.5 8 14l7.5-8"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+export function SaveDefaultButton({
+  status = 'idle',
+  onClick,
+  label = 'save config as default',
+}: {
+  status?: SaveDefaultStatus
+  onClick: () => void
+  label?: string
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className="gap-2"
+      disabled={status === 'saving'}
+      aria-busy={status === 'saving'}
+      aria-label={status === 'saved' ? `${label} (saved)` : label}
+      onClick={onClick}
+    >
+      {status === 'saving' ? <SpinnerIcon /> : null}
+      {status === 'saved' ? <CheckIcon /> : null}
+      {label}
+    </Button>
+  )
+}
 
 export function Toggle({
   value,
@@ -94,5 +173,53 @@ export function TempoFields({
         />
       </Field>
     </div>
+  )
+}
+
+export function BlockDragHelp() {
+  const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null)
+
+  const show = (event: { currentTarget: HTMLElement }) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    setAnchor({ left: rect.left, top: rect.bottom + 8 })
+  }
+
+  return (
+    <span className="inline-flex">
+      <button
+        type="button"
+        aria-label="How dragging blocks works"
+        className="flex h-4 w-4 items-center justify-center rounded-full border border-line text-[10px] leading-none text-muted hover:border-muted hover:text-white"
+        onMouseEnter={show}
+        onMouseLeave={() => setAnchor(null)}
+        onFocus={show}
+        onBlur={() => setAnchor(null)}
+      >
+        i
+      </button>
+      {anchor ? (
+        <span
+          role="tooltip"
+          style={{ left: anchor.left, top: anchor.top }}
+          className="pointer-events-none fixed z-30 w-72 rounded-xl border border-line bg-ink p-3 text-[11px] font-normal normal-case leading-relaxed tracking-normal text-muted shadow-lg"
+        >
+          Drag a movement by its handle, then drop it on:
+          <span className="mt-2 block">
+            <span className="block">
+              <strong className="text-white">A line</strong> to move it there. Dragging a
+              superset&rsquo;s first movement moves the whole group.
+            </span>
+            <span className="mt-1 block">
+              <strong className="text-white">Another movement</strong> to superset them; the
+              highlighted letter previews the result.
+            </span>
+            <span className="mt-1 block">
+              Leaving a superset drops the movement out of it, and a group left with one
+              movement becomes a single again.
+            </span>
+          </span>
+        </span>
+      ) : null}
+    </span>
   )
 }

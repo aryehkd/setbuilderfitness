@@ -8,7 +8,7 @@ import type {
 } from '../../shared/types.ts'
 import { AddMovementSlot } from '../components/AddMovementSlot.tsx'
 import { MovementDefaultsEditorCard } from '../components/SessionPrescriptionEditor.tsx'
-import { ModeToggle } from '../components/WorkoutEditorControls.tsx'
+import { ModeToggle, type SaveDefaultStatus } from '../components/WorkoutEditorControls.tsx'
 import { Card, Page, TextInput } from '../components/ui.tsx'
 import {
   movementDefaultsFromPrescription,
@@ -38,6 +38,7 @@ export function SavedMovementsPage() {
   const [query, setQuery] = useState('')
   const [sourceFilter, setSourceFilter] = useState<'all' | 'shared' | 'custom'>('all')
   const [message, setMessage] = useState<string | null>(null)
+  const [saveStatus, setSaveStatus] = useState<Record<string, SaveDefaultStatus>>({})
 
   useEffect(() => {
     void api<Movement[]>('/api/movements').then(setMovements)
@@ -62,28 +63,43 @@ export function SavedMovementsPage() {
     movement: Movement,
     defaults: MovementPrescriptionDefaults,
   ) => {
-    const resolved = await materializeMovement(movement)
-    const normalizedDefaults = {
-      ...defaults,
-      variantId:
-        resolved.variants.find((variant) => variant.equipment === defaults.equipment)?.id ??
-        null,
+    setSaveStatus((current) => ({ ...current, [movement.id]: 'saving' }))
+    try {
+      const resolved = await materializeMovement(movement)
+      const normalizedDefaults = {
+        ...defaults,
+        variantId:
+          resolved.variants.find((variant) => variant.equipment === defaults.equipment)?.id ??
+          null,
+      }
+      const claimed = await api<Movement>(
+        `/api/movements/${resolved.id}/defaults`,
+        { method: 'PUT', body: JSON.stringify(normalizedDefaults) },
+      )
+      setMovements((current) => replaceCatalogMovement(current, movement, claimed))
+      setDrafts((current) => {
+        const next = { ...current }
+        delete next[movement.id]
+        delete next[resolved.id]
+        delete next[claimed.id]
+        return next
+      })
+      setSourceFilter('custom')
+      setExpandedId(claimed.id)
+      setSaveStatus((current) => ({
+        ...current,
+        [movement.id]: 'saved',
+        [resolved.id]: 'saved',
+        [claimed.id]: 'saved',
+      }))
+      setMessage(`Saved defaults for ${movement.name}.`)
+    } catch {
+      setSaveStatus((current) => {
+        const next = { ...current }
+        delete next[movement.id]
+        return next
+      })
     }
-    const claimed = await api<Movement>(
-      `/api/movements/${resolved.id}/defaults`,
-      { method: 'PUT', body: JSON.stringify(normalizedDefaults) },
-    )
-    setMovements((current) => replaceCatalogMovement(current, movement, claimed))
-    setDrafts((current) => {
-      const next = { ...current }
-      delete next[movement.id]
-      delete next[resolved.id]
-      delete next[claimed.id]
-      return next
-    })
-    setSourceFilter('custom')
-    setExpandedId(claimed.id)
-    setMessage(`Saved defaults for ${movement.name}.`)
   }
 
   const openMovement = (movement: Movement) => {
@@ -215,8 +231,14 @@ export function SavedMovementsPage() {
                           [movement.id]: movementDefaultsFromPrescription(next),
                         }))
                         setMessage(null)
+                        setSaveStatus((current) => {
+                          const nextStatus = { ...current }
+                          delete nextStatus[movement.id]
+                          return nextStatus
+                        })
                       }}
                       onSave={() => void save(movement, defaults)}
+                      saveStatus={saveStatus[movement.id] ?? 'idle'}
                       onDelete={
                         movement.savedDefaults ? () => void remove(movement) : undefined
                       }

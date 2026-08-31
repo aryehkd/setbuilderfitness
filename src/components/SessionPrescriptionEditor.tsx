@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { AddMovementSlot } from './AddMovementSlot.tsx'
 import {
   Button,
@@ -11,25 +11,37 @@ import {
   TextInput,
 } from './ui.tsx'
 import {
+  BlockDragHelp,
   ModeToggle,
+  SaveDefaultButton,
   TempoFields,
   Toggle,
+  clearCompletedDefaultSaves,
+  type SaveDefaultStatus,
 } from './WorkoutEditorControls.tsx'
 import {
   CATEGORIES,
   EQUIPMENT,
   METHODS,
   allowsPerRepTempo,
+  arrangeExerciseDrop,
+  exerciseBlocks,
   fallbackSetPrescription,
   movementDefaultsFromPrescription,
+  moveExerciseBlock,
+  nextSupersetGroup,
   prescriptionDefaultsForMovement,
   quantityDefaultsForMethod,
   quantityLabel,
   resettleSuperset,
+  placeInSupersetOrder,
+  supersetGroupKey,
+  supersetOrderOptions,
   resizeSetPrescriptions,
   resizeTempoPerRep,
   showsRepsField,
   tempoRepCount,
+  type ExerciseDropTarget,
 } from './WorkoutEditorUtils.ts'
 import { api } from '../lib/api.ts'
 import { materializeMovement, replaceCatalogMovement } from '../lib/movements.ts'
@@ -76,6 +88,7 @@ export function SessionPrescriptionEditor({
   movementHistory = {},
   movementHistoryLoading = false,
   movementHistoryError = null,
+  readOnly = false,
   onChange,
 }: {
   name: string
@@ -85,10 +98,15 @@ export function SessionPrescriptionEditor({
   movementHistory?: MovementHistoryById
   movementHistoryLoading?: boolean
   movementHistoryError?: string | null
+  readOnly?: boolean
   onChange: (next: { name: string; prescription: Prescription }) => void
 }) {
   const [openSlot, setOpenSlot] = useState<string | null>(null)
   const [catalog, setCatalog] = useState(movements)
+  const [defaultSaveStatus, setDefaultSaveStatus] = useState<Record<string, SaveDefaultStatus>>(
+    {},
+  )
+  const skipDefaultSaveClear = useRef(false)
   const sortedMovements = useMemo(
     () => [...catalog].sort((a, b) => a.name.localeCompare(b.name)),
     [catalog],
@@ -98,7 +116,12 @@ export function SessionPrescriptionEditor({
     setCatalog(movements)
   }, [movements])
 
-  const setPrescription = (next: Prescription) => onChange({ name, prescription: next })
+  const setPrescription = (next: Prescription) => {
+    if (!skipDefaultSaveClear.current) {
+      setDefaultSaveStatus(clearCompletedDefaultSaves)
+    }
+    onChange({ name, prescription: next })
+  }
   const patchExercise = (index: number, patch: Partial<PrescribedExercise>) => {
     const exercises = prescription.exercises.map((exercise, i) =>
       i === index ? { ...exercise, ...patch } : exercise,
@@ -124,37 +147,53 @@ export function SessionPrescriptionEditor({
       exercises: removedGroup ? resettleSuperset(remaining, removedGroup) : remaining,
     })
   }
-  const saveMovementDefault = async (exercise: PrescribedExercise) => {
-    const claimed = await api<Movement>(
-      `/api/movements/${exercise.movementId}/defaults`,
-      {
-        method: 'PUT',
-        body: JSON.stringify(movementDefaultsFromPrescription(exercise)),
-      },
-    )
-    setCatalog((current) =>
-      replaceCatalogMovement(
-        current,
-        { id: exercise.movementId, sourceExerciseId: claimed.sourceExerciseId },
-        claimed,
-      ),
-    )
-    if (
-      claimed.id !== exercise.movementId ||
-      (claimed.savedDefaults?.variantId && claimed.savedDefaults.variantId !== exercise.variantId)
-    ) {
-      setPrescription({
-        ...prescription,
-        exercises: prescription.exercises.map((item) =>
-          item === exercise
-            ? {
-                ...item,
-                movementId: claimed.id,
-                movementName: claimed.name,
-                variantId: claimed.savedDefaults?.variantId ?? item.variantId,
-              }
-            : item,
+  const saveMovementDefault = async (exercise: PrescribedExercise, index: number) => {
+    const key = String(index)
+    setDefaultSaveStatus((current) => ({ ...current, [key]: 'saving' }))
+    try {
+      const claimed = await api<Movement>(
+        `/api/movements/${exercise.movementId}/defaults`,
+        {
+          method: 'PUT',
+          body: JSON.stringify(movementDefaultsFromPrescription(exercise)),
+        },
+      )
+      setCatalog((current) =>
+        replaceCatalogMovement(
+          current,
+          { id: exercise.movementId, sourceExerciseId: claimed.sourceExerciseId },
+          claimed,
         ),
+      )
+      if (
+        claimed.id !== exercise.movementId ||
+        (claimed.savedDefaults?.variantId && claimed.savedDefaults.variantId !== exercise.variantId)
+      ) {
+        skipDefaultSaveClear.current = true
+        try {
+          setPrescription({
+            ...prescription,
+            exercises: prescription.exercises.map((item) =>
+              item === exercise
+                ? {
+                    ...item,
+                    movementId: claimed.id,
+                    movementName: claimed.name,
+                    variantId: claimed.savedDefaults?.variantId ?? item.variantId,
+                  }
+                : item,
+            ),
+          })
+        } finally {
+          skipDefaultSaveClear.current = false
+        }
+      }
+      setDefaultSaveStatus((current) => ({ ...current, [key]: 'saved' }))
+    } catch {
+      setDefaultSaveStatus((current) => {
+        const next = { ...current }
+        delete next[key]
+        return next
       })
     }
   }
@@ -203,12 +242,15 @@ export function SessionPrescriptionEditor({
   )
 
   return (
-    <div className="space-y-4">
+    <fieldset disabled={readOnly} className="space-y-4">
       <Card className="space-y-4">
         <Field label="Workout name">
           <TextInput
             value={name}
-            onChange={(event) => onChange({ name: event.target.value, prescription })}
+            onChange={(event) => {
+              setDefaultSaveStatus(clearCompletedDefaultSaves)
+              onChange({ name: event.target.value, prescription })
+            }}
           />
         </Field>
         <Field label="Workout / Warmup Notes">
@@ -223,11 +265,15 @@ export function SessionPrescriptionEditor({
       </Card>
 
       <div className="space-y-4">
-        <p className="text-sm text-muted">
-          Use the plus buttons to add a movement in that spot. Use Move up and Move down to change
-          order.
-        </p>
-        {renderSlot('start', 0, 'Add movement at the start')}
+        {!readOnly ? (
+          <>
+            <p className="text-sm text-muted">
+              Use the plus buttons to add a movement in that spot. Use Move up and Move down to
+              change order.
+            </p>
+            {renderSlot('start', 0, 'Add movement at the start')}
+          </>
+        ) : null}
         {prescription.exercises.map((exercise, index) => (
           <div key={`${exercise.movementId}-${index}`} className="space-y-4">
             <SessionExerciseEditor
@@ -240,20 +286,395 @@ export function SessionPrescriptionEditor({
               historyError={movementHistoryError}
               onPatch={(patch) => patchExercise(index, patch)}
               onMove={(direction) => moveExercise(index, direction)}
-              onSaveDefault={() => void saveMovementDefault(exercise)}
+              onSaveDefault={() => void saveMovementDefault(exercise, index)}
+              saveDefaultStatus={defaultSaveStatus[String(index)] ?? 'idle'}
+              readOnly={readOnly}
+              groupSize={
+                exercise.supersetGroup?.trim()
+                  ? prescription.exercises.filter(
+                      (item) => item.supersetGroup?.trim() === exercise.supersetGroup?.trim(),
+                    ).length
+                  : 1
+              }
+              onSupersetOrder={(order) =>
+                setPrescription({
+                  ...prescription,
+                  exercises: placeInSupersetOrder(prescription.exercises, index, order),
+                })
+              }
               onRemove={() => removeExercise(index)}
             />
-            {renderSlot(
-              `after-${index}`,
-              index + 1,
-              index === prescription.exercises.length - 1
-                ? 'Add movement at the end'
-                : 'Add movement here',
-            )}
+            {!readOnly
+              ? renderSlot(
+                  `after-${index}`,
+                  index + 1,
+                  index === prescription.exercises.length - 1
+                    ? 'Add movement at the end'
+                    : 'Add movement here',
+                )
+              : null}
           </div>
         ))}
       </div>
-    </div>
+    </fieldset>
+  )
+}
+
+export function SessionPrescriptionTable({
+  name,
+  prescription,
+  readOnly = false,
+  onChange,
+}: {
+  name: string
+  prescription: Prescription
+  readOnly?: boolean
+  onChange: (next: { name: string; prescription: Prescription }) => void
+}) {
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null)
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null)
+  const [dropTarget, setDropTarget] = useState<ExerciseDropTarget | null>(null)
+  const setExercises = (exercises: PrescribedExercise[]) => {
+    onChange({ name, prescription: { ...prescription, exercises } })
+  }
+  const patchExercise = (index: number, patch: Partial<PrescribedExercise>) => {
+    const exercises = prescription.exercises.map((exercise, exerciseIndex) =>
+      exerciseIndex === index ? { ...exercise, ...patch } : exercise,
+    )
+    setExercises(exercises)
+  }
+  const changeMethod = (index: number, method: SetMethod) => {
+    const exercise = prescription.exercises[index]
+    if (!exercise) return
+    const quantities = quantityDefaultsForMethod(method)
+    patchExercise(index, {
+      method,
+      ...quantities,
+      ...(!allowsPerRepTempo(method) ? { tempoMode: 'default' as const, tempoPerRep: [] } : {}),
+      ...(!showsRepsField(method) ? { perSetEnabled: false, setPrescriptions: [] } : {}),
+    })
+  }
+  const finishDrop = (target: ExerciseDropTarget) => {
+    if (draggedIndex == null) return
+    setExercises(
+      arrangeExerciseDrop(
+        prescription.exercises,
+        draggedIndex,
+        target,
+        nextSupersetGroup(prescription.exercises),
+      ),
+    )
+    setDraggedIndex(null)
+    setDropTarget(null)
+    setExpandedIndex(null)
+  }
+
+  const blocks = exerciseBlocks(prescription.exercises)
+  const nextGroup = nextSupersetGroup(prescription.exercises)
+  type Tagged = PrescribedExercise & { dragId: number }
+  const tagged = prescription.exercises.map((exercise, index) => ({
+    ...exercise,
+    dragId: index,
+  }))
+  const previewExercises =
+    !readOnly && draggedIndex != null && dropTarget?.kind === 'row'
+      ? arrangeExerciseDrop(tagged, draggedIndex, dropTarget, nextGroup)
+      : null
+  const previewById = new Map(
+    (previewExercises as Tagged[] | null)?.map((exercise) => [exercise.dragId, exercise]) ?? [],
+  )
+  const previewTarget =
+    dropTarget?.kind === 'row' ? previewById.get(dropTarget.index) : null
+  const previewGroup = previewTarget ? supersetGroupKey(previewTarget) : null
+  const columnCount = readOnly ? 9 : 10
+  const canDrag = !readOnly
+
+  const renderDropLine = (index: number) => {
+    if (!canDrag) return null
+    const active = dropTarget?.kind === 'line' && dropTarget.index === index
+    return (
+      <tr key={`drop-line-${index}`} className="h-2">
+        <td
+          colSpan={columnCount}
+          className="p-0"
+          onDragOver={(event) => {
+            if (draggedIndex == null) return
+            event.preventDefault()
+            event.dataTransfer.dropEffect = 'move'
+            setDropTarget({ kind: 'line', index })
+          }}
+          onDrop={(event) => {
+            event.preventDefault()
+            finishDrop({ kind: 'line', index })
+          }}
+        >
+          <div className="flex h-2 items-center px-2">
+            <div
+              className={`w-full transition-colors ${
+                active ? 'h-0.5 bg-lime' : 'h-px bg-line'
+              }`}
+            />
+          </div>
+        </td>
+      </tr>
+    )
+  }
+
+  return (
+    <fieldset disabled={readOnly} className="space-y-4">
+      <Card className="space-y-4">
+        <Field label="Workout name">
+          <TextInput
+            value={name}
+            onChange={(event) => onChange({ name: event.target.value, prescription })}
+          />
+        </Field>
+        <Field label="Workout / Warmup Notes">
+          <TextArea
+            rows={3}
+            value={prescription.warmup}
+            onChange={(event) =>
+              onChange({
+                name,
+                prescription: { ...prescription, warmup: event.target.value },
+              })
+            }
+          />
+        </Field>
+      </Card>
+
+      <div className="overflow-x-auto rounded-2xl border border-line bg-panel">
+        <table className="w-full min-w-[68rem] border-collapse text-left text-sm">
+          <thead className="border-b border-line text-xs uppercase tracking-wide text-muted">
+            <tr>
+              <th className="relative w-28 px-3 py-3 font-medium">
+                <span className="flex items-center gap-1.5">
+                  Block
+                  {canDrag ? <BlockDragHelp /> : null}
+                </span>
+              </th>
+              <th className="min-w-52 px-3 py-3 font-medium">Movement</th>
+              <th className="w-36 px-3 py-3 font-medium">Category</th>
+              <th className="w-40 px-3 py-3 font-medium">Method</th>
+              <th className="w-20 px-3 py-3 font-medium">Sets</th>
+              <th className="w-24 px-3 py-3 font-medium">Target</th>
+              <th className="w-40 px-3 py-3 font-medium">Load</th>
+              <th className="w-24 px-3 py-3 font-medium">Rest</th>
+              <th className="min-w-48 px-3 py-3 font-medium">Notes</th>
+              {!readOnly ? <th className="w-24 px-3 py-3 font-medium">Details</th> : null}
+            </tr>
+          </thead>
+          <tbody>
+            {blocks.map((block, blockIndex) => {
+              const group = supersetGroupKey(block[0]!)
+              const blockStart = blocks
+                .slice(0, blockIndex)
+                .reduce((sum, item) => sum + item.length, 0)
+
+              return block.map((exercise, offset) => {
+                const index = prescription.exercises.indexOf(exercise)
+                const rowTargeted = dropTarget?.kind === 'row' && dropTarget.index === index
+                const previewExercise = previewById.get(index)
+                const previewed =
+                  Boolean(previewGroup) &&
+                  supersetGroupKey(previewExercise ?? exercise) === previewGroup
+                const displayGroup = previewed ? supersetGroupKey(previewExercise!) : group
+                const displayOrder = previewed
+                  ? previewExercise!.supersetOrder
+                  : exercise.supersetOrder
+                return (
+                  <Fragment key={`${exercise.movementId}-${index}`}>
+                    {renderDropLine(blockStart + offset)}
+                    <tr
+                      className={`border-b border-line align-top last:border-b-0 ${
+                        rowTargeted
+                          ? 'bg-lime/5 outline outline-1 -outline-offset-1 outline-lime'
+                          : ''
+                      } ${draggedIndex === index ? 'opacity-50' : ''}`}
+                      onDragOver={(event) => {
+                        if (!canDrag || draggedIndex == null || draggedIndex === index) return
+                        event.preventDefault()
+                        event.dataTransfer.dropEffect = 'move'
+                        setDropTarget({ kind: 'row', index })
+                      }}
+                      onDragLeave={(event) => {
+                        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                          setDropTarget((current) =>
+                            current?.kind === 'row' && current.index === index ? null : current,
+                          )
+                        }
+                      }}
+                      onDrop={(event) => {
+                        if (!canDrag) return
+                        event.preventDefault()
+                        finishDrop({ kind: 'row', index })
+                      }}
+                    >
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          {canDrag ? (
+                            <button
+                              type="button"
+                              draggable
+                              className="cursor-grab select-none rounded-lg px-2 py-2 text-base leading-none text-muted hover:bg-panel hover:text-white active:cursor-grabbing"
+                              aria-label={`Drag ${exercise.movementName}`}
+                              title="Drag movement to reorder or create a superset"
+                              onDragStart={(event) => {
+                                event.dataTransfer.effectAllowed = 'move'
+                                event.dataTransfer.setData('text/plain', String(index))
+                                setDraggedIndex(index)
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+                                event.preventDefault()
+                                const direction = event.key === 'ArrowUp' ? -1 : 1
+                                setExercises(
+                                  moveExerciseBlock(prescription.exercises, blockIndex, direction),
+                                )
+                              }}
+                              onDragEnd={() => {
+                                setDraggedIndex(null)
+                                setDropTarget(null)
+                              }}
+                            >
+                              ⋮⋮
+                            </button>
+                          ) : null}
+                          <span className={`font-medium ${previewed ? 'text-lime' : ''}`}>
+                            {displayGroup
+                              ? `${displayGroup}${displayOrder ?? offset + 1}`
+                              : blockIndex + 1}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 font-medium">{exercise.movementName}</td>
+                  <td className="px-3 py-2">
+                    <Select
+                      value={exercise.category ?? 'accessory'}
+                      onChange={(event) =>
+                        patchExercise(index, {
+                          category: event.target.value as ExerciseCategory,
+                        })
+                      }
+                    >
+                      {CATEGORIES.map((category) => (
+                        <option key={category.value} value={category.value}>
+                          {category.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <Select
+                      value={exercise.method}
+                      onChange={(event) => changeMethod(index, event.target.value as SetMethod)}
+                    >
+                      {METHODS.map((method) => (
+                        <option key={method.value} value={method.value}>
+                          {method.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <NumericTextInput
+                      value={exercise.setCount}
+                      onChange={(event) =>
+                        patchExercise(index, {
+                          setCount: event.target.value ? Number(event.target.value) : 0,
+                        })
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    {showsRepsField(exercise.method) ? (
+                      <NumericTextInput
+                        aria-label={quantityLabel(exercise.method)}
+                        value={exercise.repsMin ?? ''}
+                        onChange={(event) =>
+                          patchExercise(index, {
+                            repsMin: event.target.value ? Number(event.target.value) : 0,
+                          })
+                        }
+                      />
+                    ) : (
+                      <span className="text-muted">—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <TextInput
+                      value={exercise.loadPrescription ?? ''}
+                      onChange={(event) =>
+                        patchExercise(index, {
+                          loadPrescription: event.target.value || null,
+                        })
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <NumericTextInput
+                      aria-label="Rest after set"
+                      value={exercise.restAfterSetSeconds ?? ''}
+                      onChange={(event) =>
+                        patchExercise(index, {
+                          restAfterSetSeconds: event.target.value
+                            ? Number(event.target.value)
+                            : null,
+                        })
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <TextInput
+                      value={exercise.notes ?? ''}
+                      onChange={(event) =>
+                        patchExercise(index, { notes: event.target.value || null })
+                      }
+                    />
+                  </td>
+                  {!readOnly ? (
+                    <td className="px-3 py-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() =>
+                          setExpandedIndex(expandedIndex === index ? null : index)
+                        }
+                      >
+                        {expandedIndex === index ? 'Close' : 'Open'}
+                      </Button>
+                    </td>
+                  ) : null}
+                </tr>
+                    {!readOnly && expandedIndex === index ? (
+                      <tr className="border-b border-line bg-ink/25">
+                        <td colSpan={columnCount} className="p-3">
+                          <SessionExerciseEditor
+                            exercise={exercise}
+                            index={index}
+                            count={prescription.exercises.length}
+                            historyLoading={false}
+                            historyError={null}
+                            onPatch={(patch) => patchExercise(index, patch)}
+                            onMove={() => undefined}
+                            onSaveDefault={() => undefined}
+                            onRemove={undefined}
+                            structureControls={false}
+                            showHistory={false}
+                            showSaveDefault={false}
+                          />
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                )
+              })
+            })}
+            {canDrag ? renderDropLine(prescription.exercises.length) : null}
+          </tbody>
+        </table>
+      </div>
+    </fieldset>
   )
 }
 
@@ -262,11 +683,13 @@ export function MovementDefaultsEditorCard({
   onChange,
   onSave,
   onDelete,
+  saveStatus = 'idle',
 }: {
   exercise: PrescribedExercise
   onChange: (exercise: PrescribedExercise) => void
   onSave: () => void
   onDelete?: () => void
+  saveStatus?: SaveDefaultStatus
 }) {
   return (
     <SessionExerciseEditor
@@ -278,6 +701,7 @@ export function MovementDefaultsEditorCard({
       onPatch={(patch) => onChange({ ...exercise, ...patch })}
       onMove={() => undefined}
       onSaveDefault={onSave}
+      saveDefaultStatus={saveStatus}
       onRemove={onDelete}
       structureControls={false}
       showHistory={false}
@@ -299,9 +723,14 @@ function SessionExerciseEditor({
   onPatch,
   onMove,
   onSaveDefault,
+  saveDefaultStatus = 'idle',
+  readOnly = false,
+  groupSize = 1,
+  onSupersetOrder,
   onRemove,
   structureControls = true,
   showHistory = true,
+  showSaveDefault = true,
   saveLabel = 'save config as default',
   removeLabel = 'Remove',
   removeQuestion = 'Remove this movement?',
@@ -316,9 +745,14 @@ function SessionExerciseEditor({
   onPatch: (patch: Partial<PrescribedExercise>) => void
   onMove: (direction: -1 | 1) => void
   onSaveDefault: () => void
+  saveDefaultStatus?: SaveDefaultStatus
+  readOnly?: boolean
+  groupSize?: number
+  onSupersetOrder?: (order: number) => void
   onRemove?: () => void
   structureControls?: boolean
   showHistory?: boolean
+  showSaveDefault?: boolean
   saveLabel?: string
   removeLabel?: string
   removeQuestion?: string
@@ -415,7 +849,8 @@ function SessionExerciseEditor({
             {CATEGORIES.find((category) => category.value === ex.category)?.label ?? 'Accessory'}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        {!readOnly && (structureControls || showSaveDefault || onRemove) ? (
+          <div className="flex flex-wrap gap-2">
           {structureControls ? (
             <>
               <Button type="button" variant="ghost" disabled={index === 0} onClick={() => onMove(-1)}>
@@ -431,15 +866,20 @@ function SessionExerciseEditor({
               </Button>
             </>
           ) : null}
-          <Button type="button" variant="ghost" onClick={onSaveDefault}>
-            {saveLabel}
-          </Button>
+          {showSaveDefault ? (
+            <SaveDefaultButton
+              status={saveDefaultStatus}
+              onClick={onSaveDefault}
+              label={saveLabel}
+            />
+          ) : null}
           {onRemove ? (
             <ConfirmButton onConfirm={onRemove} question={removeQuestion}>
               {removeLabel}
             </ConfirmButton>
           ) : null}
-        </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
@@ -666,14 +1106,16 @@ function SessionExerciseEditor({
               />
             </Field>
             <Field label="Order in group">
-              <NumericTextInput
-                value={ex.supersetOrder ?? ''}
-                onChange={(event) =>
-                  onPatch({
-                    supersetOrder: event.target.value ? Number(event.target.value) : null,
-                  })
-                }
-              />
+              <Select
+                value={String(ex.supersetOrder ?? 1)}
+                onChange={(event) => onSupersetOrder?.(Number(event.target.value))}
+              >
+                {supersetOrderOptions(groupSize, ex.supersetOrder ?? null).map((order) => (
+                  <option key={order} value={order}>
+                    {order}
+                  </option>
+                ))}
+              </Select>
             </Field>
           </>
         ) : null}
