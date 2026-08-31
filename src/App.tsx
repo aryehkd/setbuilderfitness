@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AppShell } from './components/AppShell.tsx'
 import { DevBar } from './components/DevBar.tsx'
+import { ScrollToTop } from './components/ScrollToTop.tsx'
 import { useAuth } from './lib/auth.tsx'
 import { ClientDetailPage } from './pages/ClientDetailPage.tsx'
 import { ClientListPage } from './pages/ClientListPage.tsx'
@@ -78,6 +79,7 @@ export default function App() {
 
   return (
     <>
+      <ScrollToTop />
       {import.meta.env.DEV && <DevBar />}
       <Routes>
       <Route

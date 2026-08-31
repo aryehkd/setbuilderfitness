@@ -194,6 +194,8 @@ export default async (req: Request) => {
     }
 
     if (path === '/api/ad-hoc') return await handleAdHoc(ctx, req)
+    const adHocMatch = path.match(/^\/api\/ad-hoc\/([^/]+)$/)
+    if (adHocMatch) return await handleAdHoc(ctx, req, adHocMatch[1])
     if (path === '/api/activity' && req.method === 'GET') {
       return await handleActivity(ctx, req)
     }

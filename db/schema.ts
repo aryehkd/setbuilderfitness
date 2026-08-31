@@ -48,9 +48,13 @@ export const clients = pgTable(
       .unique()
       .references(() => users.id, { onDelete: 'cascade' }),
     trainerId: uuid('trainer_id').references(() => trainers.id),
+    isSelf: boolean('is_self').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('clients_trainer_id_idx').on(t.trainerId)],
+  (t) => [
+    index('clients_trainer_id_idx').on(t.trainerId),
+    index('clients_trainer_self_idx').on(t.trainerId, t.isSelf),
+  ],
 )
 
 export const movements = pgTable(

@@ -63,7 +63,12 @@ type AppUser = {
 }
 
 type TrainerRow = { id: string; user_id: string; code: string }
-type ClientRow = { id: string; user_id: string; trainer_id: string | null }
+type ClientRow = {
+  id: string
+  user_id: string
+  trainer_id: string | null
+  is_self: boolean
+}
 
 export type AppContext = {
   db: Db
@@ -84,6 +89,7 @@ export async function loadContext(
 
   const db = getDatabase()
   await ensureUserProfileColumns(db)
+  await ensureTrainerSelfClients(db)
   await ensureMovementCatalog(db)
   await ensureProgramTables(db)
 
@@ -110,7 +116,7 @@ export async function loadContext(
     SELECT id, user_id, code FROM trainers WHERE user_id = ${user.id}
   `
   const clients = await db.sql<ClientRow>`
-    SELECT id, user_id, trainer_id FROM clients WHERE user_id = ${user.id}
+    SELECT id, user_id, trainer_id, is_self FROM clients WHERE user_id = ${user.id}
   `
 
   return {
@@ -126,6 +132,7 @@ export async function loadContext(
 }
 
 let userProfileColumnsReady = false
+let trainerSelfClientsReady = false
 let movementCatalogReady = false
 let programTablesReady = false
 
@@ -140,6 +147,27 @@ async function ensureUserProfileColumns(db: Db) {
       ADD COLUMN IF NOT EXISTS accent_color TEXT
   `
   userProfileColumnsReady = true
+}
+
+async function ensureTrainerSelfClients(db: Db) {
+  if (trainerSelfClientsReady) return
+  await db.sql`
+    ALTER TABLE clients
+      ADD COLUMN IF NOT EXISTS is_self BOOLEAN NOT NULL DEFAULT FALSE
+  `
+  await db.sql`
+    INSERT INTO clients (user_id, trainer_id, is_self)
+    SELECT t.user_id, t.id, TRUE
+    FROM trainers t
+    ON CONFLICT (user_id) DO UPDATE
+    SET trainer_id = EXCLUDED.trainer_id,
+        is_self = TRUE
+  `
+  await db.sql`
+    CREATE INDEX IF NOT EXISTS clients_trainer_self_idx
+    ON clients (trainer_id, is_self)
+  `
+  trainerSelfClientsReady = true
 }
 
 async function ensureProgramTables(db: Db) {
@@ -377,6 +405,7 @@ export function mePayload(ctx: AppContext, extras?: {
       ? {
           id: ctx.client.id,
           trainerId: ctx.client.trainer_id,
+          isSelf: ctx.client.is_self,
           trainerName: extras?.trainerName ?? null,
           trainerCode: extras?.trainerCode ?? null,
         }
@@ -541,8 +570,14 @@ export async function handleOnboarding(ctx: AppContext, req: Request) {
           onboarding_completed_at = NOW()
       WHERE id = ${ctx.user.id}
     `
+    const [trainer] = await ctx.db.sql<{ id: string }>`
+      INSERT INTO trainers (user_id, code)
+      VALUES (${ctx.user.id}, ${code})
+      RETURNING id
+    `
     await ctx.db.sql`
-      INSERT INTO trainers (user_id, code) VALUES (${ctx.user.id}, ${code})
+      INSERT INTO clients (user_id, trainer_id, is_self)
+      VALUES (${ctx.user.id}, ${trainer!.id}, TRUE)
     `
   } else {
     const code = body.trainerCode?.trim().toUpperCase()
@@ -606,7 +641,7 @@ async function authorizedClient(ctx: AppContext, clientId: string | null) {
   if (ctx.client && (!clientId || clientId === ctx.client.id)) return ctx.client
   if (!ctx.trainer || !clientId) return null
   const rows = await ctx.db.sql<ClientRow>`
-    SELECT id, user_id, trainer_id
+    SELECT id, user_id, trainer_id, is_self
     FROM clients
     WHERE id = ${clientId} AND trainer_id = ${ctx.trainer.id}
   `
@@ -1746,7 +1781,9 @@ export async function handleAssignProgram(ctx: AppContext, programId: string, re
   if (!startMonday) return error('startDate is invalid')
   const clients = await ctx.db.sql<{ id: string }>`
     SELECT id FROM clients
-    WHERE id = ${body.clientId} AND trainer_id = ${ctx.trainer!.id}
+    WHERE id = ${body.clientId}
+      AND trainer_id = ${ctx.trainer!.id}
+      AND is_self = FALSE
   `
   if (!clients[0]) return error('Client not found', 404)
   const programSessions = await loadProgramSessions(ctx.db, programId)
@@ -2082,6 +2119,7 @@ export async function handleTrainerClients(ctx: AppContext) {
     FROM clients c
     JOIN users u ON u.id = c.user_id
     WHERE c.trainer_id = ${ctx.trainer!.id}
+      AND c.is_self = FALSE
     ORDER BY u.name
   `
   return json(
@@ -2151,6 +2189,7 @@ type SessionRow = {
   logged_duration_seconds: number | null
   completed_at: unknown
   client_name?: string
+  is_trainer_workout?: boolean
   version_history?: unknown
 }
 
@@ -2174,6 +2213,7 @@ function mapSession(row: SessionRow, logs: SetLog[] = []): Session {
     completedAt: asIso(row.completed_at),
     logs,
     clientName: row.client_name,
+    isTrainerWorkout: row.is_trainer_workout ?? false,
     versionHistory: parseVersionHistory(row.version_history),
   }
 }
@@ -2211,9 +2251,11 @@ export async function handleAssignSession(ctx: AppContext, req: Request) {
   if (!body.clientId || !body.templateId || !body.date) {
     return error('clientId, templateId, and date are required')
   }
-  const clients = await ctx.db.sql<{ id: string }>`
-    SELECT id FROM clients
-    WHERE id = ${body.clientId} AND trainer_id = ${ctx.trainer!.id}
+  const clients = await ctx.db.sql<{ id: string; name: string; is_self: boolean }>`
+    SELECT c.id, u.name, c.is_self
+    FROM clients c
+    JOIN users u ON u.id = c.user_id
+    WHERE c.id = ${body.clientId} AND c.trainer_id = ${ctx.trainer!.id}
   `
   if (!clients[0]) return error('Client not found', 404)
   const templates = await ctx.db.sql<TemplateRow>`
@@ -2238,7 +2280,14 @@ export async function handleAssignSession(ctx: AppContext, req: Request) {
     RETURNING *
   `
   await appendHistory(ctx.db, 'workout_templates', body.templateId, [assigned])
-  return json(mapSession(row!), 201)
+  return json(
+    mapSession({
+      ...row!,
+      client_name: clients[0].name,
+      is_trainer_workout: clients[0].is_self,
+    }),
+    201,
+  )
 }
 
 export async function handleDeleteSession(ctx: AppContext, id: string) {
@@ -2258,7 +2307,7 @@ export async function handleListSessions(ctx: AppContext, req: Request) {
 
   if (ctx.trainer) {
     const rows = await ctx.db.sql<SessionRow>`
-      SELECT s.*, u.name AS client_name
+      SELECT s.*, u.name AS client_name, c.is_self AS is_trainer_workout
       FROM sessions s
       JOIN clients c ON c.id = s.client_id
       JOIN users u ON u.id = c.user_id
@@ -2291,7 +2340,7 @@ async function canViewSession(ctx: AppContext, session: SessionRow) {
 
 export async function handleGetSession(ctx: AppContext, id: string) {
   const rows = await ctx.db.sql<SessionRow>`
-    SELECT s.*, u.name AS client_name
+    SELECT s.*, u.name AS client_name, c.is_self AS is_trainer_workout
     FROM sessions s
     JOIN clients c ON c.id = s.client_id
     JOIN users u ON u.id = c.user_id
@@ -2377,8 +2426,11 @@ export async function handleUpdateSession(ctx: AppContext, id: string, req: Requ
   }
 
   const current = await ctx.db.sql<SessionRow>`
-    SELECT * FROM sessions
-    WHERE id = ${id} AND trainer_id = ${ctx.trainer!.id}
+    SELECT s.*, u.name AS client_name, c.is_self AS is_trainer_workout
+    FROM sessions s
+    JOIN clients c ON c.id = s.client_id
+    JOIN users u ON u.id = c.user_id
+    WHERE s.id = ${id} AND s.trainer_id = ${ctx.trainer!.id}
   `
   if (!current[0]) return error('Session not found', 404)
   const previous = mapSession(current[0])
@@ -2407,7 +2459,11 @@ export async function handleUpdateSession(ctx: AppContext, id: string, req: Requ
   if (updated) {
     await appendHistory(ctx.db, 'sessions', id, history)
     return json({
-      ...mapSession(updated),
+      ...mapSession({
+        ...updated,
+        client_name: current[0].client_name,
+        is_trainer_workout: current[0].is_trainer_workout,
+      }),
       versionHistory: [...(parseVersionHistory(updated.version_history)), ...history],
     })
   }
@@ -2422,7 +2478,11 @@ export async function handleUpdateSession(ctx: AppContext, id: string, req: Requ
 
 export async function handleLogSession(ctx: AppContext, id: string, req: Request) {
   const rows = await ctx.db.sql<SessionRow>`
-    SELECT * FROM sessions WHERE id = ${id}
+    SELECT s.*, u.name AS client_name, c.is_self AS is_trainer_workout
+    FROM sessions s
+    JOIN clients c ON c.id = s.client_id
+    JOIN users u ON u.id = c.user_id
+    WHERE s.id = ${id}
   `
   if (!rows[0] || !(await canViewSession(ctx, rows[0]))) {
     return error('Session not found', 404)
@@ -2468,11 +2528,23 @@ export async function handleLogSession(ctx: AppContext, id: string, req: Request
     RETURNING *
   `
   const logs = await loadLogs(ctx.db, id)
-  return json(mapSession(updated!, logs))
+  return json(
+    mapSession(
+      {
+        ...updated!,
+        client_name: rows[0].client_name,
+        is_trainer_workout: rows[0].is_trainer_workout,
+      },
+      logs,
+    ),
+  )
 }
 
-export async function handleAdHoc(ctx: AppContext, req: Request) {
-  if (req.method === 'GET') {
+export async function handleAdHoc(ctx: AppContext, req: Request, id?: string) {
+  if (req.method === 'GET' && !id) {
+    const url = new URL(req.url)
+    const from = url.searchParams.get('from')
+    const to = url.searchParams.get('to')
     const rows = await ctx.db.sql<{
       id: string
       activity_type: AdHocType
@@ -2483,6 +2555,8 @@ export async function handleAdHoc(ctx: AppContext, req: Request) {
       SELECT id, activity_type, duration_seconds, notes, logged_on
       FROM ad_hoc_logs
       WHERE user_id = ${ctx.user.id}
+        AND (${from}::date IS NULL OR logged_on >= ${from}::date)
+        AND (${to}::date IS NULL OR logged_on <= ${to}::date)
       ORDER BY logged_on DESC, created_at DESC
       LIMIT 100
     `
@@ -2497,14 +2571,61 @@ export async function handleAdHoc(ctx: AppContext, req: Request) {
     )
   }
 
+  if (req.method === 'PUT' && id) {
+    const body = (await req.json()) as {
+      activityType?: AdHocType
+      durationMinutes?: number
+      notes?: string
+      loggedOn?: string
+    }
+    if (
+      !body.activityType ||
+      !['cardio', 'sport', 'mobility', 'other'].includes(body.activityType) ||
+      !Number.isFinite(body.durationMinutes) ||
+      body.durationMinutes! <= 0 ||
+      !body.loggedOn
+    ) {
+      return error('activityType, positive durationMinutes, and loggedOn are required')
+    }
+    const [row] = await ctx.db.sql<{
+      id: string
+      activity_type: AdHocType
+      duration_seconds: number
+      notes: string | null
+      logged_on: unknown
+    }>`
+      UPDATE ad_hoc_logs
+      SET activity_type = ${body.activityType},
+          duration_seconds = ${Math.round(body.durationMinutes! * 60)},
+          notes = ${body.notes ?? null},
+          logged_on = ${body.loggedOn}
+      WHERE id = ${id} AND user_id = ${ctx.user.id}
+      RETURNING id, activity_type, duration_seconds, notes, logged_on
+    `
+    if (!row) return error('Activity not found', 404)
+    return json({
+      id: row.id,
+      activityType: row.activity_type,
+      durationSeconds: row.duration_seconds,
+      notes: row.notes,
+      loggedOn: asDate(row.logged_on),
+    })
+  }
+
+  if (req.method !== 'POST' || id) return error('Method not allowed', 405)
   const body = (await req.json()) as {
     activityType?: AdHocType
     durationMinutes?: number
     notes?: string
     loggedOn?: string
   }
-  if (!body.activityType || !body.durationMinutes) {
-    return error('activityType and durationMinutes are required')
+  if (
+    !body.activityType ||
+    !['cardio', 'sport', 'mobility', 'other'].includes(body.activityType) ||
+    !Number.isFinite(body.durationMinutes) ||
+    body.durationMinutes! <= 0
+  ) {
+    return error('activityType and positive durationMinutes are required')
   }
   const loggedOn = body.loggedOn || new Date().toISOString().slice(0, 10)
   const [row] = await ctx.db.sql<{
@@ -2518,7 +2639,7 @@ export async function handleAdHoc(ctx: AppContext, req: Request) {
     VALUES (
       ${ctx.user.id},
       ${body.activityType},
-      ${Math.round(body.durationMinutes * 60)},
+      ${Math.round(body.durationMinutes! * 60)},
       ${body.notes ?? null},
       ${loggedOn}
     )

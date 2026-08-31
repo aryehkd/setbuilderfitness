@@ -827,7 +827,7 @@ function SessionExerciseEditor({
           onPatch({ equipment: (event.target.value || null) as Equipment | null })
         }
       >
-        <option value="">—</option>
+        <option value="">None</option>
         {EQUIPMENT.map((equipment) => (
           <option key={equipment.value} value={equipment.value}>
             {equipment.label}

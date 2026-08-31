@@ -1,9 +1,22 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { ExtraActivityForm } from '../components/ExtraActivityForm.tsx'
+import { WorkoutSchedule } from '../components/WorkoutSchedule.tsx'
 import { Card } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
 import { useAuth } from '../lib/auth.tsx'
-import type { Program, Session, TrainerClient, WorkoutTemplate } from '../../shared/types.ts'
+import {
+  currentMonthCursor,
+  monthRange,
+  type MonthCursor,
+} from '../lib/workoutSchedule.ts'
+import type {
+  AdHocLog,
+  Program,
+  Session,
+  TrainerClient,
+  WorkoutTemplate,
+} from '../../shared/types.ts'
 
 const HOME_PREVIEW_LIMIT = 5
 
@@ -26,15 +39,32 @@ export function TrainerHomePage() {
   const [clients, setClients] = useState<TrainerClient[]>([])
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([])
   const [programs, setPrograms] = useState<Program[]>([])
-  const [upcoming, setUpcoming] = useState<Session[]>([])
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [activities, setActivities] = useState<AdHocLog[]>([])
+  const [cursor, setCursor] = useState<MonthCursor>(currentMonthCursor)
+  const [selectedClientId, setSelectedClientId] = useState('')
+  const { from, to } = monthRange(cursor)
 
   useEffect(() => {
     void api<TrainerClient[]>('/api/clients').then(setClients)
     void api<WorkoutTemplate[]>('/api/templates').then(setTemplates)
     void api<Program[]>('/api/programs').then(setPrograms)
-    const from = new Date().toISOString().slice(0, 10)
-    void api<Session[]>(`/api/sessions?from=${from}`).then(setUpcoming)
   }, [])
+
+  useEffect(() => {
+    const query = new URLSearchParams({ from, to })
+    if (selectedClientId) query.set('clientId', selectedClientId)
+    void api<Session[]>(`/api/sessions?${query.toString()}`).then(setSessions)
+  }, [from, to, selectedClientId])
+
+  const reloadActivities = async () => {
+    setActivities(await api<AdHocLog[]>(`/api/ad-hoc?from=${from}&to=${to}`))
+  }
+
+  useEffect(() => {
+    void reloadActivities()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, to])
 
   const recentClients = useMemo(
     () =>
@@ -131,25 +161,38 @@ export function TrainerHomePage() {
           </ul>
         </Card>
       </div>
-      <Card>
-        <h2 className="mb-3 font-semibold">Upcoming assigned sessions</h2>
-        {upcoming.length === 0 && <p className="text-sm text-muted">Nothing on the calendar yet.</p>}
-        <ul className="divide-y divide-line">
-          {upcoming.slice(0, 12).map((s) => (
-            <li key={s.id}>
-              <Link
-                to={`/sessions/${s.id}`}
-                className="flex min-h-14 flex-col items-start gap-1 py-3 text-sm hover:text-lime sm:flex-row sm:items-center sm:justify-between sm:gap-4"
-              >
-                <span className="break-words">
-                  {s.scheduledDate} · {s.name}
-                </span>
-                <span className="shrink-0 text-muted">{s.clientName}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </Card>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <label htmlFor="schedule-person" className="mb-1 block text-sm font-medium">
+            Show workouts for
+          </label>
+          <select
+            id="schedule-person"
+            className="min-h-11 rounded-xl border border-line bg-ink px-3 py-2.5 text-sm"
+            value={selectedClientId}
+            onChange={(event) => setSelectedClientId(event.target.value)}
+          >
+            <option value="">Everyone</option>
+            {me?.client?.isSelf ? <option value={me.client.id}>Myself</option> : null}
+            {clients.map((client) => (
+              <option key={client.id} value={client.id}>
+                {client.name || client.email}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <WorkoutSchedule
+        sessions={sessions}
+        activities={
+          !selectedClientId || selectedClientId === me?.client?.id ? activities : []
+        }
+        cursor={cursor}
+        onCursorChange={setCursor}
+        onActivityUpdated={reloadActivities}
+        showAssignee
+      />
+      <ExtraActivityForm onLogged={reloadActivities} />
     </div>
   )
 }

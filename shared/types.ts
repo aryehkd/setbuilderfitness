@@ -238,6 +238,7 @@ export type Session = {
   completedAt: string | null
   logs: SetLog[]
   clientName?: string
+  isTrainerWorkout?: boolean
   versionHistory?: VersionHistoryEvent[]
 }
 
@@ -260,6 +261,7 @@ export type MeResponse = {
   client: {
     id: string
     trainerId: string | null
+    isSelf: boolean
     trainerName: string | null
     trainerCode: string | null
   } | null
@@ -290,6 +292,14 @@ export type TrainerClient = {
 export type ActivityDay = {
   date: string
   minutes: number
+}
+
+export type AdHocLog = {
+  id: string
+  activityType: AdHocType
+  durationSeconds: number
+  notes: string | null
+  loggedOn: string
 }
 
 export type ExerciseHistoryEntry = {

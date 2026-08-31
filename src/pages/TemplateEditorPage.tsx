@@ -1561,7 +1561,7 @@ function ExerciseCard({
           onPatch(ex.id, { equipment: (e.target.value || null) as Equipment | null }, true)
         }
       >
-        <option value="">—</option>
+        <option value="">None</option>
         {EQUIPMENT.map((item) => (
           <option key={item.value} value={item.value}>
             {item.label}

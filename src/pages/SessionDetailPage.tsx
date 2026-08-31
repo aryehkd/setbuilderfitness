@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Button, Card, Field, TextInput } from '../components/ui.tsx'
+import { Button, Card, ConfirmButton, Field, TextInput } from '../components/ui.tsx'
 import {
   PrescribedExerciseCard,
   RestAfterMovement,
@@ -42,7 +42,9 @@ export function SessionDetailPage() {
   const [draft, setDraft] = useState<{ name: string; prescription: Prescription } | null>(null)
   const [movements, setMovements] = useState<Movement[]>([])
   const [savingAssignment, setSavingAssignment] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+  const isOwnWorkout = !isClient && Boolean(session?.isTrainerWorkout)
   const assignmentHistory = useMovementHistoryContext(
     !isClient && editing ? (session?.clientId ?? '') : '',
     draft?.prescription.exercises.map((exercise) => exercise.movementId) ?? [],
@@ -64,7 +66,7 @@ export function SessionDetailPage() {
       data.loggedDurationSeconds ? String(Math.round(data.loggedDurationSeconds / 60)) : '',
     )
     if (me?.user.role !== 'client') {
-      setTrainerMode(data.logs.length > 0 ? 'log' : 'cards')
+      setTrainerMode(data.isTrainerWorkout || data.logs.length > 0 ? 'log' : 'cards')
     }
   }
 
@@ -165,6 +167,19 @@ export function SessionDetailPage() {
     setEditError(null)
   }
 
+  const deleteOwnWorkout = async () => {
+    if (!id || !session) return
+    setDeleting(true)
+    setEditError(null)
+    try {
+      await api(`/api/sessions/${id}`, { method: 'DELETE' })
+      navigate('/')
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : 'Could not delete workout')
+      setDeleting(false)
+    }
+  }
+
   if (!session) return <p className="p-6 text-muted">Loading session…</p>
 
   const assignmentEditable =
@@ -181,7 +196,7 @@ export function SessionDetailPage() {
         <div className="min-w-0">
           <p className="text-sm text-muted">
             {session.scheduledDate}
-            {!isClient && session.clientName ? ` · ${session.clientName}` : ''}
+            {!isClient && !isOwnWorkout && session.clientName ? ` · ${session.clientName}` : ''}
           </p>
           <h1 className="break-words font-display text-2xl font-bold sm:text-3xl">
             {shownName}
@@ -189,14 +204,22 @@ export function SessionDetailPage() {
           <p className="text-xs uppercase text-muted">{session.status}</p>
           {editing ? (
             <p className="text-sm text-muted">
-              Editing this client&apos;s assigned copy only.
+              {isOwnWorkout
+                ? 'Editing your scheduled copy only.'
+                : "Editing this client's assigned copy only."}
             </p>
           ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
-          {assignmentEditable && trainerMode !== 'log' && !editing ? (
-            <Button type="button" onClick={() => void startEditing()}>
-              Edit assigned workout
+          {assignmentEditable && !editing && (isOwnWorkout || trainerMode !== 'log') ? (
+            <Button
+              type="button"
+              onClick={() => {
+                if (trainerMode === 'log') setTrainerMode('cards')
+                void startEditing()
+              }}
+            >
+              {isOwnWorkout ? 'Edit workout' : 'Edit assigned workout'}
             </Button>
           ) : null}
           {editing && draft ? (
@@ -218,10 +241,22 @@ export function SessionDetailPage() {
               </Button>
             </>
           ) : null}
+          {isOwnWorkout && !editing ? (
+            <ConfirmButton
+              disabled={deleting}
+              confirmLabel="Confirm delete"
+              question="Remove this workout from your schedule?"
+              onConfirm={() => void deleteOwnWorkout()}
+            >
+              {deleting ? 'Deleting…' : 'Delete workout'}
+            </ConfirmButton>
+          ) : null}
           <Button
             type="button"
             variant="ghost"
-            onClick={() => navigate(isClient ? '/' : `/clients/${session.clientId}`)}
+            onClick={() =>
+              navigate(isClient || isOwnWorkout ? '/' : `/clients/${session.clientId}`)
+            }
           >
             Exit
           </Button>
@@ -246,8 +281,9 @@ export function SessionDetailPage() {
       {!isClient && trainerMode !== 'log' && !assignmentEditable ? (
         <Card>
           <p className="text-sm text-muted">
-            This assigned workout is locked because logging has started or the session is no longer
-            assigned.
+            {isOwnWorkout
+              ? 'This workout is locked because logging has started or it is no longer scheduled.'
+              : 'This assigned workout is locked because logging has started or the session is no longer assigned.'}
           </p>
         </Card>
       ) : null}
@@ -258,7 +294,7 @@ export function SessionDetailPage() {
           name={shownName}
           prescription={shownPrescription}
           movements={movements}
-          clientName={session.clientName || 'Client'}
+          clientName={isOwnWorkout ? 'You' : session.clientName || 'Client'}
           movementHistory={assignmentHistory.history}
           movementHistoryLoading={assignmentHistory.loading}
           movementHistoryError={assignmentHistory.error}

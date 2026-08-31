@@ -38,12 +38,14 @@ export function ProfilePage() {
   }, [me])
 
   useEffect(() => {
-    if (!isClient) return
+    if (!me) return
     void api<ActivityDay[]>(`/api/activity?year=${year}`).then(setDays)
-    void api<Session[] | { sessions: Session[] }>('/api/past-workouts').then((data) => {
-      setPast(Array.isArray(data) ? data : data.sessions)
-    })
-  }, [year, isClient])
+    if (isClient) {
+      void api<Session[] | { sessions: Session[] }>('/api/past-workouts').then((data) => {
+        setPast(Array.isArray(data) ? data : data.sessions)
+      })
+    }
+  }, [year, isClient, me])
 
   const save = async () => {
     if (!draft) return
@@ -84,13 +86,12 @@ export function ProfilePage() {
               Trainer code <span className="font-mono text-lime">{me.trainer.code}</span>
             </p>
           )}
-          {me?.client?.trainerName && (
+          {isClient && me?.client?.trainerName && (
             <p className="text-sm text-muted">Trainer: {me.client.trainerName}</p>
           )}
         </div>
       </div>
-      {!isClient ? (
-        draft && (
+      {!isClient && draft ? (
         <Card className="space-y-4">
           <h2 className="font-semibold">Profile</h2>
           <ProfileFields draft={draft} onChange={setDraft} />
@@ -110,13 +111,13 @@ export function ProfilePage() {
             {saved && <span className="text-sm text-muted">Saved</span>}
           </div>
         </Card>
-        )
-      ) : (
+      ) : null}
+      <Card>
+        <h2 className="mb-4 font-semibold">{year} Activity</h2>
+        <Heatmap year={year} days={days} />
+      </Card>
+      {isClient ? (
         <>
-          <Card>
-            <h2 className="mb-4 font-semibold">{year} Completed sessions</h2>
-            <Heatmap year={year} days={days} />
-          </Card>
           <Card>
             <h2 className="mb-3 font-semibold">Past workouts</h2>
             {past.length === 0 && <p className="text-sm text-muted">No completed workouts yet.</p>}
@@ -140,7 +141,7 @@ export function ProfilePage() {
             />
           )}
         </>
-      )}
+      ) : null}
       <Button variant="ghost" className="w-full sm:w-auto" onClick={() => void logout()}>
         Log out
       </Button>
