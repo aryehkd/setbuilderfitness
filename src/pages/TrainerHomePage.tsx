@@ -1,9 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Button, Card } from '../components/ui.tsx'
+import { Card } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
 import { useAuth } from '../lib/auth.tsx'
 import type { Program, Session, TrainerClient, WorkoutTemplate } from '../../shared/types.ts'
+
+const HOME_PREVIEW_LIMIT = 5
+
+function recencyMs(iso: string | null | undefined) {
+  if (!iso) return 0
+  const value = Date.parse(iso)
+  return Number.isNaN(value) ? 0 : value
+}
+
+function SeeAllLink({ to }: { to: string }) {
+  return (
+    <Link to={to} className="shrink-0 text-sm text-muted hover:text-lime">
+      See all
+    </Link>
+  )
+}
 
 export function TrainerHomePage() {
   const { me } = useAuth()
@@ -20,6 +36,26 @@ export function TrainerHomePage() {
     void api<Session[]>(`/api/sessions?from=${from}`).then(setUpcoming)
   }, [])
 
+  const recentClients = useMemo(
+    () =>
+      [...clients]
+        .sort((a, b) => {
+          const dateDiff = recencyMs(b.lastSessionDate) - recencyMs(a.lastSessionDate)
+          if (dateDiff) return dateDiff
+          return b.upcomingCount - a.upcomingCount
+        })
+        .slice(0, HOME_PREVIEW_LIMIT),
+    [clients],
+  )
+  const recentTemplates = useMemo(
+    () => [...templates].sort((a, b) => recencyMs(b.updatedAt) - recencyMs(a.updatedAt)).slice(0, HOME_PREVIEW_LIMIT),
+    [templates],
+  )
+  const recentPrograms = useMemo(
+    () => [...programs].sort((a, b) => recencyMs(b.updatedAt) - recencyMs(a.updatedAt)).slice(0, HOME_PREVIEW_LIMIT),
+    [programs],
+  )
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -32,27 +68,20 @@ export function TrainerHomePage() {
             </span>
           </p>
         </div>
-        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-          <Link to="/programs" className="w-full sm:w-auto">
-            <Button variant="ghost" className="w-full sm:w-auto">
-              Programs
-            </Button>
-          </Link>
-          <Link to="/workouts" className="w-full sm:w-auto">
-            <Button className="w-full sm:w-auto">New workout</Button>
-          </Link>
-        </div>
       </div>
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
-          <h2 className="mb-3 font-semibold">Clients</h2>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="font-semibold">Clients</h2>
+            <SeeAllLink to="/clients" />
+          </div>
           {clients.length === 0 && (
             <p className="text-sm text-muted">
               No clients yet. Share your code so they can join.
             </p>
           )}
           <ul className="space-y-2">
-            {clients.map((c) => (
+            {recentClients.map((c) => (
               <li key={c.id}>
                 <Link
                   to={`/clients/${c.id}`}
@@ -66,12 +95,15 @@ export function TrainerHomePage() {
           </ul>
         </Card>
         <Card>
-          <h2 className="mb-3 font-semibold">Workout templates</h2>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="font-semibold">Workout templates</h2>
+            <SeeAllLink to="/workouts" />
+          </div>
           {templates.length === 0 && (
             <p className="text-sm text-muted">Create a template to assign sessions.</p>
           )}
           <ul className="space-y-2">
-            {templates.slice(0, 6).map((t) => (
+            {recentTemplates.map((t) => (
               <li key={t.id}>
                 <Link to={`/workouts/${t.id}`} className="text-sm hover:text-lime">
                   {t.name}
@@ -81,12 +113,15 @@ export function TrainerHomePage() {
           </ul>
         </Card>
         <Card>
-          <h2 className="mb-3 font-semibold">Programs</h2>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="font-semibold">Programs</h2>
+            <SeeAllLink to="/programs" />
+          </div>
           {programs.length === 0 && (
             <p className="text-sm text-muted">Build a program from your saved workouts.</p>
           )}
           <ul className="space-y-2">
-            {programs.slice(0, 6).map((program) => (
+            {recentPrograms.map((program) => (
               <li key={program.id}>
                 <Link to={`/programs/${program.id}`} className="text-sm hover:text-lime">
                   {program.name}

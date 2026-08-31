@@ -58,6 +58,7 @@ export const movements = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     trainerId: uuid('trainer_id').references(() => trainers.id, { onDelete: 'cascade' }),
+    sourceExerciseId: text('source_exercise_id'),
     name: text('name').notNull(),
     aliases: text('aliases').array().notNull().default([]),
     muscleGroups: text('muscle_groups').array().notNull().default([]),
@@ -66,7 +67,37 @@ export const movements = pgTable(
     defaultEquipment: text('default_equipment'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('movements_name_idx').on(t.name), index('movements_trainer_id_idx').on(t.trainerId)],
+  (t) => [
+    index('movements_name_idx').on(t.name),
+    index('movements_trainer_id_idx').on(t.trainerId),
+    index('movements_source_exercise_id_idx').on(t.sourceExerciseId),
+  ],
+)
+
+/**
+ * Shared catalog from Open Exercise DB (https://github.com/Glowupp-app/open-exercisedb).
+ * Kept separate from trainer `movements` until the app is wired to this source.
+ */
+export const exerciseLibrary = pgTable(
+  'exercise_library',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    difficulty: integer('difficulty').notNull(),
+    category: text('category').notNull(),
+    equipment: text('equipment').array().notNull().default([]),
+    primaryMuscle: text('primary_muscle').notNull(),
+    secondaryMuscles: text('secondary_muscles').array().notNull().default([]),
+    muscleIntensity: jsonb('muscle_intensity').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('exercise_library_name_idx').on(t.name),
+    index('exercise_library_category_idx').on(t.category),
+    index('exercise_library_primary_muscle_idx').on(t.primaryMuscle),
+  ],
 )
 
 export const movementVariants = pgTable(
@@ -79,6 +110,26 @@ export const movementVariants = pgTable(
     equipment: text('equipment').notNull(),
   },
   (t) => [unique().on(t.movementId, t.equipment)],
+)
+
+export const trainerMovementDefaults = pgTable(
+  'trainer_movement_defaults',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    trainerId: uuid('trainer_id')
+      .notNull()
+      .references(() => trainers.id, { onDelete: 'cascade' }),
+    movementId: uuid('movement_id')
+      .notNull()
+      .references(() => movements.id, { onDelete: 'cascade' }),
+    defaults: jsonb('defaults').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique().on(t.trainerId, t.movementId),
+    index('trainer_movement_defaults_trainer_id_idx').on(t.trainerId),
+  ],
 )
 
 export const workoutTemplates = pgTable('workout_templates', {

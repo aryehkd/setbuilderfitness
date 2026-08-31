@@ -21,7 +21,8 @@ import {
   METHODS,
   allowsPerRepTempo,
   fallbackSetPrescription,
-  movementDefaults,
+  movementDefaultsFromPrescription,
+  prescriptionDefaultsForMovement,
   quantityDefaultsForMethod,
   quantityLabel,
   resettleSuperset,
@@ -31,6 +32,7 @@ import {
   tempoRepCount,
 } from './WorkoutEditorUtils.ts'
 import { api } from '../lib/api.ts'
+import { materializeMovement, replaceCatalogMovement } from '../lib/movements.ts'
 import { MovementHistoryContext } from './MovementHistoryContext.tsx'
 import type {
   Equipment,
@@ -56,30 +58,13 @@ function hasConfiguredTempo(ex: PrescribedExercise) {
 }
 
 function newExercise(movement: Movement): PrescribedExercise {
-  const defaults = movementDefaults(movement)
+  const defaults = prescriptionDefaultsForMovement(movement)
   return {
     movementId: movement.id,
     movementName: movement.name,
-    variantId: defaults.variantId,
-    equipment: defaults.equipment,
-    setCount: 3,
-    repsMin: 8,
-    repsMax: null,
-    perSetEnabled: false,
-    setPrescriptions: [],
-    method: 'straight',
-    methodTarget: null,
-    category: defaults.category,
-    loadPrescription: null,
-    tempo: {},
-    tempoMode: 'default',
-    tempoPerRep: [],
-    restAfterSetSeconds: 90,
-    restAfterExerciseSeconds: 90,
+    ...defaults,
     supersetGroup: null,
     supersetOrder: null,
-    notes: null,
-    youtubeUrl: movement.youtubeUrl,
   }
 }
 
@@ -139,10 +124,48 @@ export function SessionPrescriptionEditor({
       exercises: removedGroup ? resettleSuperset(remaining, removedGroup) : remaining,
     })
   }
-  const insertExercise = (index: number, movement: Movement) => {
+  const saveMovementDefault = async (exercise: PrescribedExercise) => {
+    const claimed = await api<Movement>(
+      `/api/movements/${exercise.movementId}/defaults`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(movementDefaultsFromPrescription(exercise)),
+      },
+    )
+    setCatalog((current) =>
+      replaceCatalogMovement(
+        current,
+        { id: exercise.movementId, sourceExerciseId: claimed.sourceExerciseId },
+        claimed,
+      ),
+    )
+    if (
+      claimed.id !== exercise.movementId ||
+      (claimed.savedDefaults?.variantId && claimed.savedDefaults.variantId !== exercise.variantId)
+    ) {
+      setPrescription({
+        ...prescription,
+        exercises: prescription.exercises.map((item) =>
+          item === exercise
+            ? {
+                ...item,
+                movementId: claimed.id,
+                movementName: claimed.name,
+                variantId: claimed.savedDefaults?.variantId ?? item.variantId,
+              }
+            : item,
+        ),
+      })
+    }
+  }
+  const insertExercise = async (index: number, movement: Movement) => {
+    const selectedMovement = await materializeMovement(movement)
     const exercises = [...prescription.exercises]
-    exercises.splice(index, 0, newExercise(movement))
+    exercises.splice(index, 0, newExercise(selectedMovement))
     setPrescription({ ...prescription, exercises })
+    setCatalog((current) =>
+      current.map((item) => (item.id === movement.id ? selectedMovement : item)),
+    )
     setOpenSlot(null)
   }
   const rememberMovement = (movement: Movement) => {
@@ -162,7 +185,7 @@ export function SessionPrescriptionEditor({
       body: JSON.stringify({ name, category, equipment }),
     })
     rememberMovement(movement)
-    insertExercise(index, movement)
+    await insertExercise(index, movement)
   }
   const renderSlot = (key: string, index: number, label: string) => (
     <AddMovementSlot
@@ -172,7 +195,7 @@ export function SessionPrescriptionEditor({
       open={openSlot === key}
       onOpen={() => setOpenSlot(key)}
       onCancel={() => setOpenSlot(null)}
-      onSelect={(movement) => insertExercise(index, movement)}
+      onSelect={(movement) => void insertExercise(index, movement)}
       onCreate={(name, category, equipment) =>
         void createAndInsert(index, name, category, equipment)
       }
@@ -217,6 +240,7 @@ export function SessionPrescriptionEditor({
               historyError={movementHistoryError}
               onPatch={(patch) => patchExercise(index, patch)}
               onMove={(direction) => moveExercise(index, direction)}
+              onSaveDefault={() => void saveMovementDefault(exercise)}
               onRemove={() => removeExercise(index)}
             />
             {renderSlot(
@@ -233,6 +257,37 @@ export function SessionPrescriptionEditor({
   )
 }
 
+export function MovementDefaultsEditorCard({
+  exercise,
+  onChange,
+  onSave,
+  onDelete,
+}: {
+  exercise: PrescribedExercise
+  onChange: (exercise: PrescribedExercise) => void
+  onSave: () => void
+  onDelete?: () => void
+}) {
+  return (
+    <SessionExerciseEditor
+      exercise={exercise}
+      index={0}
+      count={1}
+      historyLoading={false}
+      historyError={null}
+      onPatch={(patch) => onChange({ ...exercise, ...patch })}
+      onMove={() => undefined}
+      onSaveDefault={onSave}
+      onRemove={onDelete}
+      structureControls={false}
+      showHistory={false}
+      saveLabel="Save changes"
+      removeLabel="Remove default"
+      removeQuestion="Remove these saved defaults?"
+    />
+  )
+}
+
 function SessionExerciseEditor({
   exercise: ex,
   index,
@@ -243,7 +298,13 @@ function SessionExerciseEditor({
   historyError,
   onPatch,
   onMove,
+  onSaveDefault,
   onRemove,
+  structureControls = true,
+  showHistory = true,
+  saveLabel = 'save config as default',
+  removeLabel = 'Remove',
+  removeQuestion = 'Remove this movement?',
 }: {
   exercise: PrescribedExercise
   index: number
@@ -254,7 +315,13 @@ function SessionExerciseEditor({
   historyError: string | null
   onPatch: (patch: Partial<PrescribedExercise>) => void
   onMove: (direction: -1 | 1) => void
-  onRemove: () => void
+  onSaveDefault: () => void
+  onRemove?: () => void
+  structureControls?: boolean
+  showHistory?: boolean
+  saveLabel?: string
+  removeLabel?: string
+  removeQuestion?: string
 }) {
   const [tempoOpen, setTempoOpen] = useState(() => hasConfiguredTempo(ex))
   const isRange = ex.method === 'reps_range'
@@ -341,27 +408,37 @@ function SessionExerciseEditor({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <p className="font-semibold">
-            {index + 1}. {ex.movementName}
+            {structureControls ? `${index + 1}. ` : null}
+            {ex.movementName}
           </p>
           <p className="text-xs uppercase text-muted">
             {CATEGORIES.find((category) => category.value === ex.category)?.label ?? 'Accessory'}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="ghost" disabled={index === 0} onClick={() => onMove(-1)}>
-            Move up
+          {structureControls ? (
+            <>
+              <Button type="button" variant="ghost" disabled={index === 0} onClick={() => onMove(-1)}>
+                Move up
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={index === count - 1}
+                onClick={() => onMove(1)}
+              >
+                Move down
+              </Button>
+            </>
+          ) : null}
+          <Button type="button" variant="ghost" onClick={onSaveDefault}>
+            {saveLabel}
           </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={index === count - 1}
-            onClick={() => onMove(1)}
-          >
-            Move down
-          </Button>
-          <ConfirmButton onConfirm={onRemove} question="Remove this movement?">
-            Remove
-          </ConfirmButton>
+          {onRemove ? (
+            <ConfirmButton onConfirm={onRemove} question={removeQuestion}>
+              {removeLabel}
+            </ConfirmButton>
+          ) : null}
         </div>
       </div>
 
@@ -493,14 +570,16 @@ function SessionExerciseEditor({
           />
         </Field>
       )}
-      <MovementHistoryContext
-        movementName={ex.movementName}
-        clientName={clientName}
-        entries={history}
-        loading={historyLoading}
-        error={historyError}
-        showSelectPrompt
-      />
+      {showHistory ? (
+        <MovementHistoryContext
+          movementName={ex.movementName}
+          clientName={clientName}
+          entries={history}
+          loading={historyLoading}
+          error={historyError}
+          showSelectPrompt
+        />
+      ) : null}
 
       <div className="space-y-2">
         {!tempoOpen ? (
@@ -577,23 +656,27 @@ function SessionExerciseEditor({
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Superset group">
-          <TextInput
-            value={ex.supersetGroup ?? ''}
-            placeholder="None"
-            onChange={(event) => onPatch({ supersetGroup: event.target.value || null })}
-          />
-        </Field>
-        <Field label="Order in group">
-          <NumericTextInput
-            value={ex.supersetOrder ?? ''}
-            onChange={(event) =>
-              onPatch({
-                supersetOrder: event.target.value ? Number(event.target.value) : null,
-              })
-            }
-          />
-        </Field>
+        {structureControls ? (
+          <>
+            <Field label="Superset group">
+              <TextInput
+                value={ex.supersetGroup ?? ''}
+                placeholder="None"
+                onChange={(event) => onPatch({ supersetGroup: event.target.value || null })}
+              />
+            </Field>
+            <Field label="Order in group">
+              <NumericTextInput
+                value={ex.supersetOrder ?? ''}
+                onChange={(event) =>
+                  onPatch({
+                    supersetOrder: event.target.value ? Number(event.target.value) : null,
+                  })
+                }
+              />
+            </Field>
+          </>
+        ) : null}
         <Field label="Rest after set (s)">
           <NumericTextInput
             value={ex.restAfterSetSeconds ?? ''}

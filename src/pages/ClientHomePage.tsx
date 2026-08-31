@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Button, Card, Field, TextInput } from '../components/ui.tsx'
+import { Button, Card, DateInput, Field, TextInput } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
 import { useAuth } from '../lib/auth.tsx'
 import type { AdHocType, Session } from '../../shared/types.ts'
@@ -214,7 +214,7 @@ export function ClientHomePage() {
             <TextInput value={minutes} onChange={(e) => setMinutes(e.target.value)} />
           </Field>
           <Field label="Date">
-            <TextInput type="date" value={loggedOn} onChange={(e) => setLoggedOn(e.target.value)} />
+            <DateInput value={loggedOn} onChange={(e) => setLoggedOn(e.target.value)} />
           </Field>
           <Field label="Notes">
             <TextInput value={notes} onChange={(e) => setNotes(e.target.value)} />

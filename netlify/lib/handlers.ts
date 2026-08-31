@@ -7,6 +7,7 @@ import type {
   MeResponse,
   Movement,
   MovementHistoryById,
+  MovementPrescriptionDefaults,
   PrescribedExercise,
   Prescription,
   Session,
@@ -184,12 +185,51 @@ async function ensureProgramTables(db: Db) {
 async function ensureMovementCatalog(db: Db) {
   if (!movementCatalogReady) {
     await db.sql`
+      CREATE TABLE IF NOT EXISTS exercise_library (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        difficulty INT NOT NULL CHECK (difficulty BETWEEN 1 AND 10),
+        category TEXT NOT NULL CHECK (
+          category IN ('strength', 'cardio', 'mobility', 'stretching', 'power')
+        ),
+        equipment TEXT[] NOT NULL DEFAULT '{}',
+        primary_muscle TEXT NOT NULL,
+        secondary_muscles TEXT[] NOT NULL DEFAULT '{}',
+        muscle_intensity JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `
+    await db.sql`
       ALTER TABLE movements
         ADD COLUMN IF NOT EXISTS trainer_id UUID REFERENCES trainers(id) ON DELETE CASCADE,
+        ADD COLUMN IF NOT EXISTS source_exercise_id TEXT REFERENCES exercise_library(id) ON DELETE SET NULL,
         ADD COLUMN IF NOT EXISTS default_category TEXT,
         ADD COLUMN IF NOT EXISTS default_equipment TEXT
     `
     await db.sql`CREATE INDEX IF NOT EXISTS movements_trainer_id_idx ON movements (trainer_id)`
+    await db.sql`CREATE INDEX IF NOT EXISTS movements_source_exercise_id_idx ON movements (source_exercise_id)`
+    await db.sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS movements_shared_source_unique
+      ON movements (source_exercise_id)
+      WHERE trainer_id IS NULL AND source_exercise_id IS NOT NULL
+    `
+    await db.sql`
+      CREATE TABLE IF NOT EXISTS trainer_movement_defaults (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        trainer_id UUID NOT NULL REFERENCES trainers(id) ON DELETE CASCADE,
+        movement_id UUID NOT NULL REFERENCES movements(id) ON DELETE CASCADE,
+        defaults JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (trainer_id, movement_id)
+      )
+    `
+    await db.sql`
+      CREATE INDEX IF NOT EXISTS trainer_movement_defaults_trainer_id_idx
+      ON trainer_movement_defaults (trainer_id)
+    `
     await db.sql`DROP INDEX IF EXISTS movements_name_unique`
     await db.sql`
       CREATE UNIQUE INDEX IF NOT EXISTS movements_shared_name_unique
@@ -201,6 +241,34 @@ async function ensureMovementCatalog(db: Db) {
       ON movements (trainer_id, lower(name))
       WHERE trainer_id IS NOT NULL
     `
+    await db.sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS movements_trainer_source_unique
+      ON movements (trainer_id, source_exercise_id)
+      WHERE trainer_id IS NOT NULL AND source_exercise_id IS NOT NULL
+    `
+    await db.sql`
+      CREATE TABLE IF NOT EXISTS exercise_library (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        difficulty INT NOT NULL CHECK (difficulty BETWEEN 1 AND 10),
+        category TEXT NOT NULL CHECK (
+          category IN ('strength', 'cardio', 'mobility', 'stretching', 'power')
+        ),
+        equipment TEXT[] NOT NULL DEFAULT '{}',
+        primary_muscle TEXT NOT NULL,
+        secondary_muscles TEXT[] NOT NULL DEFAULT '{}',
+        muscle_intensity JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `
+    await db.sql`CREATE INDEX IF NOT EXISTS exercise_library_name_idx ON exercise_library (lower(name))`
+    await db.sql`CREATE INDEX IF NOT EXISTS exercise_library_category_idx ON exercise_library (category)`
+    await db.sql`
+      CREATE INDEX IF NOT EXISTS exercise_library_primary_muscle_idx
+      ON exercise_library (lower(primary_muscle))
+    `
     movementCatalogReady = true
   }
 
@@ -208,6 +276,10 @@ async function ensureMovementCatalog(db: Db) {
     SELECT COUNT(*)::text AS count FROM movements
   `
   if (Number(count) > 0) return
+  const [{ count: libraryCount }] = await db.sql<{ count: string }>`
+    SELECT COUNT(*)::text AS count FROM exercise_library
+  `
+  if (Number(libraryCount) > 0) return
 
   for (const seed of MOVEMENT_SEEDS) {
     const [movement] = await db.sql<{ id: string }>`
@@ -236,6 +308,8 @@ function catalogTrainerId(ctx: AppContext) {
 
 type MovementRow = {
   id: string
+  trainer_id: string | null
+  source_exercise_id: string | null
   name: string
   aliases: string[]
   muscle_groups: string[]
@@ -247,16 +321,26 @@ type MovementRow = {
 function mapMovement(
   row: MovementRow,
   variants: Movement['variants'],
+  savedDefaults: MovementPrescriptionDefaults | null = null,
 ): Movement {
   return {
     id: row.id,
+    source: row.trainer_id ? 'trainer' : 'shared',
+    sourceExerciseId: row.source_exercise_id,
     name: row.name,
+    description: null,
+    difficulty: null,
+    libraryCategory: null,
     aliases: row.aliases ?? [],
     muscleGroups: row.muscle_groups ?? [],
+    primaryMuscle: null,
+    secondaryMuscles: [],
+    muscleIntensity: {},
     youtubeUrl: row.youtube_url,
     defaultCategory: row.default_category,
     defaultEquipment: row.default_equipment,
     variants,
+    savedDefaults,
   }
 }
 
@@ -529,68 +613,66 @@ async function authorizedClient(ctx: AppContext, clientId: string | null) {
   return rows[0] ?? null
 }
 
+type ExerciseLibraryRow = {
+  id: string
+  name: string
+  description: string
+  difficulty: number
+  category: string
+  equipment: string[]
+  primary_muscle: string
+  secondary_muscles: string[]
+  muscle_intensity: Record<string, string>
+}
+
+function humanizeExerciseName(value: string) {
+  return value
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+function appEquipment(values: string[]): Equipment {
+  const value = values[0]?.toLowerCase()
+  if (value === 'bodyweight') return 'bodyweight'
+  if (value === 'barbell') return 'barbell'
+  if (value === 'dumbbell' || value === 'weights') return 'dumbbell'
+  if (value === 'machine') return 'machine'
+  if (value === 'cable') return 'cable'
+  if (value === 'kettlebell') return 'kettlebell'
+  return 'other'
+}
+
 export async function handleMovements(ctx: AppContext, req: Request) {
   const url = new URL(req.url)
-  const q = url.searchParams.get('q')?.trim()
+  const query = url.searchParams.get('q')?.trim().toLowerCase() ?? ''
   const trainerId = catalogTrainerId(ctx)
-  const search = q ? `%${q}%` : null
-  const rows = search
-    ? trainerId
-      ? await ctx.db.sql<MovementRow>`
-          SELECT id, name, aliases, muscle_groups, youtube_url, default_category, default_equipment
-          FROM movements
-          WHERE (trainer_id IS NULL OR trainer_id = ${trainerId})
-            AND (
-              name ILIKE ${search}
-              OR EXISTS (
-                SELECT 1 FROM unnest(aliases) a WHERE a ILIKE ${search}
-              )
-            )
-            AND NOT (
-              trainer_id IS NULL
-              AND EXISTS (
-                SELECT 1 FROM movements mine
-                WHERE mine.trainer_id = ${trainerId}
-                  AND lower(mine.name) = lower(movements.name)
-              )
-            )
-          ORDER BY name
-          LIMIT 80
-        `
-      : await ctx.db.sql<MovementRow>`
-          SELECT id, name, aliases, muscle_groups, youtube_url, default_category, default_equipment
-          FROM movements
-          WHERE trainer_id IS NULL
-            AND (
-              name ILIKE ${search}
-              OR EXISTS (
-                SELECT 1 FROM unnest(aliases) a WHERE a ILIKE ${search}
-              )
-            )
-          ORDER BY name
-          LIMIT 80
-        `
-    : trainerId
-      ? await ctx.db.sql<MovementRow>`
-          SELECT id, name, aliases, muscle_groups, youtube_url, default_category, default_equipment
-          FROM movements
-          WHERE (trainer_id IS NULL OR trainer_id = ${trainerId})
-            AND NOT (
-              trainer_id IS NULL
-              AND EXISTS (
-                SELECT 1 FROM movements mine
-                WHERE mine.trainer_id = ${trainerId}
-                  AND lower(mine.name) = lower(movements.name)
-              )
-            )
-          ORDER BY name
-        `
-      : await ctx.db.sql<MovementRow>`
-          SELECT id, name, aliases, muscle_groups, youtube_url, default_category, default_equipment
-          FROM movements
-          WHERE trainer_id IS NULL
-          ORDER BY name
-        `
+  const rows = trainerId
+    ? await ctx.db.sql<MovementRow>`
+        SELECT id, trainer_id, source_exercise_id, name, aliases, muscle_groups,
+               youtube_url, default_category, default_equipment
+        FROM movements
+        WHERE trainer_id = ${trainerId}
+        ORDER BY name
+      `
+    : []
+
+  const library = await ctx.db.sql<ExerciseLibraryRow>`
+    SELECT id, name, description, difficulty, category, equipment,
+           primary_muscle, secondary_muscles, muscle_intensity
+    FROM exercise_library
+    ORDER BY name
+  `
+  const canonicalRows = await ctx.db.sql<MovementRow>`
+    SELECT id, trainer_id, source_exercise_id, name, aliases, muscle_groups,
+           youtube_url, default_category, default_equipment
+    FROM movements
+    WHERE trainer_id IS NULL AND source_exercise_id IS NOT NULL
+  `
+  const canonicalBySource = new Map(
+    canonicalRows
+      .filter((row) => row.source_exercise_id)
+      .map((row) => [row.source_exercise_id!, row]),
+  )
 
   const variants = await ctx.db.sql<{
     id: string
@@ -606,12 +688,88 @@ export async function handleMovements(ctx: AppContext, req: Request) {
     byMovement.set(v.movement_id, list)
   }
 
-  return json(rows.map((row) => mapMovement(row, byMovement.get(row.id) ?? [])))
+  const defaultsByMovement = new Map<string, MovementPrescriptionDefaults>()
+  if (trainerId) {
+    const defaults = await ctx.db.sql<{ movement_id: string; defaults: unknown }>`
+      SELECT movement_id, defaults
+      FROM trainer_movement_defaults
+      WHERE trainer_id = ${trainerId}
+    `
+    for (const item of defaults) {
+      defaultsByMovement.set(
+        item.movement_id,
+        parseJsonColumn<MovementPrescriptionDefaults>(item.defaults, {
+          setCount: 3,
+          repsMin: 8,
+          method: 'straight',
+        }),
+      )
+    }
+  }
+
+  const personal = rows.map((row) =>
+    mapMovement(
+      row,
+      byMovement.get(row.id) ?? [],
+      defaultsByMovement.get(row.id) ?? null,
+    ),
+  )
+  const overriddenSources = new Set(
+    personal.map((movement) => movement.sourceExerciseId).filter(Boolean),
+  )
+  const overriddenNames = new Set(personal.map((movement) => movement.name.toLowerCase()))
+  const shared: Movement[] = library
+    .filter(
+      (exercise) =>
+        !overriddenSources.has(exercise.id) &&
+        !overriddenNames.has(humanizeExerciseName(exercise.name).toLowerCase()),
+    )
+    .map((exercise) => {
+      const canonical = canonicalBySource.get(exercise.id)
+      const equipment = appEquipment(exercise.equipment)
+      return {
+        id: canonical?.id ?? `shared:${exercise.id}`,
+        source: 'shared',
+        sourceExerciseId: exercise.id,
+        name: humanizeExerciseName(exercise.name),
+        description: exercise.description,
+        difficulty: exercise.difficulty,
+        libraryCategory: exercise.category,
+        aliases: [],
+        muscleGroups: [exercise.primary_muscle, ...(exercise.secondary_muscles ?? [])],
+        primaryMuscle: exercise.primary_muscle,
+        secondaryMuscles: exercise.secondary_muscles ?? [],
+        muscleIntensity: exercise.muscle_intensity ?? {},
+        youtubeUrl: null,
+        defaultCategory: 'accessory',
+        defaultEquipment: equipment,
+        variants: canonical ? byMovement.get(canonical.id) ?? [] : [],
+        savedDefaults: canonical
+          ? defaultsByMovement.get(canonical.id) ?? null
+          : null,
+      }
+    })
+  const mapped = [...personal, ...shared]
+    .filter(
+      (movement) =>
+        !query ||
+        movement.name.toLowerCase().includes(query) ||
+        movement.aliases.some((alias) => alias.toLowerCase().includes(query)) ||
+        movement.muscleGroups.some((muscle) => muscle.toLowerCase().includes(query)),
+    )
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(0, query ? 80 : undefined)
+  return json(
+    url.searchParams.get('saved') === 'true'
+      ? mapped.filter((movement) => movement.savedDefaults)
+      : mapped,
+  )
 }
 
 async function movementWithVariants(db: Db, id: string): Promise<Movement | null> {
   const rows = await db.sql<MovementRow>`
-    SELECT id, name, aliases, muscle_groups, youtube_url, default_category, default_equipment
+    SELECT id, trainer_id, source_exercise_id, name, aliases, muscle_groups,
+           youtube_url, default_category, default_equipment
     FROM movements
     WHERE id = ${id}
   `
@@ -666,8 +824,7 @@ export async function handleCreateMovement(ctx: AppContext, req: Request) {
   const existing = await ctx.db.sql<{ id: string }>`
     SELECT id FROM movements
     WHERE lower(name) = lower(${name})
-      AND (trainer_id = ${ctx.trainer!.id} OR trainer_id IS NULL)
-    ORDER BY trainer_id NULLS LAST
+      AND trainer_id = ${ctx.trainer!.id}
     LIMIT 1
   `
   if (existing[0]) {
@@ -686,6 +843,273 @@ export async function handleCreateMovement(ctx: AppContext, req: Request) {
   `
   const movement = await movementWithVariants(ctx.db, inserted!.id)
   return json(movement, 201)
+}
+
+export async function handleMaterializeSharedMovement(ctx: AppContext, req: Request) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const body = (await req.json()) as { sourceExerciseId?: string }
+  const sourceExerciseId = body.sourceExerciseId?.trim()
+  if (!sourceExerciseId) return error('Shared exercise id is required')
+
+  const [source] = await ctx.db.sql<ExerciseLibraryRow>`
+    SELECT id, name, description, difficulty, category, equipment,
+           primary_muscle, secondary_muscles, muscle_intensity
+    FROM exercise_library
+    WHERE id = ${sourceExerciseId}
+  `
+  if (!source) return error('Shared movement not found', 404)
+
+  let [canonical] = await ctx.db.sql<{ id: string }>`
+    SELECT id
+    FROM movements
+    WHERE trainer_id IS NULL AND source_exercise_id = ${sourceExerciseId}
+  `
+  if (!canonical) {
+    const equipment = appEquipment(source.equipment)
+    ;[canonical] = await ctx.db.sql<{ id: string }>`
+      INSERT INTO movements (
+        trainer_id, source_exercise_id, name, aliases, muscle_groups,
+        default_category, default_equipment
+      )
+      VALUES (
+        NULL,
+        ${source.id},
+        ${humanizeExerciseName(source.name)},
+        ${[]},
+        ${[source.primary_muscle, ...(source.secondary_muscles ?? [])]},
+        ${'accessory'},
+        ${equipment}
+      )
+      ON CONFLICT DO NOTHING
+      RETURNING id
+    `
+    if (!canonical) {
+      ;[canonical] = await ctx.db.sql<{ id: string }>`
+        SELECT id
+        FROM movements
+        WHERE trainer_id IS NULL AND source_exercise_id = ${sourceExerciseId}
+      `
+    }
+    if (canonical) {
+      await ctx.db.sql`
+        INSERT INTO movement_variants (movement_id, equipment)
+        VALUES (${canonical.id}, ${equipment})
+        ON CONFLICT (movement_id, equipment) DO NOTHING
+      `
+    }
+  }
+  if (!canonical) return error('Could not prepare shared movement', 500)
+
+  const movement = await movementForTrainer(ctx, canonical.id)
+  if (!movement) return error('Could not prepare shared movement', 500)
+  return json(movement)
+}
+
+async function movementForTrainer(ctx: AppContext, movementId: string): Promise<Movement | null> {
+  const movement = await movementWithVariants(ctx.db, movementId)
+  if (!movement) return null
+  const [saved] = await ctx.db.sql<{ defaults: unknown }>`
+    SELECT defaults
+    FROM trainer_movement_defaults
+    WHERE trainer_id = ${ctx.trainer!.id} AND movement_id = ${movementId}
+  `
+  return {
+    ...movement,
+    savedDefaults: saved
+      ? parseJsonColumn<MovementPrescriptionDefaults>(saved.defaults, {
+          setCount: 3,
+          repsMin: 8,
+          method: 'straight',
+        })
+      : null,
+  }
+}
+
+async function claimTrainerMovement(
+  ctx: AppContext,
+  movementId: string,
+): Promise<{ ok: true; id: string; name: string } | { ok: false; response: Response }> {
+  const [current] = await ctx.db.sql<{
+    id: string
+    name: string
+    trainer_id: string | null
+    source_exercise_id: string | null
+    aliases: string[]
+    muscle_groups: string[]
+    youtube_url: string | null
+    default_category: ExerciseCategory | null
+    default_equipment: Equipment | null
+  }>`
+    SELECT id, name, trainer_id, source_exercise_id, aliases, muscle_groups,
+           youtube_url, default_category, default_equipment
+    FROM movements
+    WHERE id = ${movementId}
+      AND (trainer_id IS NULL OR trainer_id = ${ctx.trainer!.id})
+  `
+  if (!current) return { ok: false, response: error('Movement not found', 404) }
+  if (current.trainer_id === ctx.trainer!.id) {
+    return { ok: true, id: current.id, name: current.name }
+  }
+
+  if (current.source_exercise_id) {
+    const [owned] = await ctx.db.sql<{ id: string; name: string }>`
+      SELECT id, name
+      FROM movements
+      WHERE trainer_id = ${ctx.trainer!.id}
+        AND source_exercise_id = ${current.source_exercise_id}
+      LIMIT 1
+    `
+    if (owned) return { ok: true, id: owned.id, name: owned.name }
+  }
+
+  const [named] = await ctx.db.sql<{ id: string; name: string }>`
+    SELECT id, name
+    FROM movements
+    WHERE trainer_id = ${ctx.trainer!.id}
+      AND lower(name) = lower(${current.name})
+    LIMIT 1
+  `
+  if (named) return { ok: true, id: named.id, name: named.name }
+
+  const [inserted] = await ctx.db.sql<{ id: string; name: string }>`
+    INSERT INTO movements (
+      trainer_id, source_exercise_id, name, aliases, muscle_groups,
+      youtube_url, default_category, default_equipment
+    )
+    VALUES (
+      ${ctx.trainer!.id},
+      ${current.source_exercise_id},
+      ${current.name},
+      ${current.aliases ?? []},
+      ${current.muscle_groups ?? []},
+      ${current.youtube_url},
+      ${current.default_category},
+      ${current.default_equipment}
+    )
+    RETURNING id, name
+  `
+  const variants = await ctx.db.sql<{ equipment: Equipment }>`
+    SELECT equipment FROM movement_variants WHERE movement_id = ${current.id}
+  `
+  for (const variant of variants) {
+    await ctx.db.sql`
+      INSERT INTO movement_variants (movement_id, equipment)
+      VALUES (${inserted!.id}, ${variant.equipment})
+      ON CONFLICT (movement_id, equipment) DO NOTHING
+    `
+  }
+  if (variants.length === 0 && current.default_equipment) {
+    await ctx.db.sql`
+      INSERT INTO movement_variants (movement_id, equipment)
+      VALUES (${inserted!.id}, ${current.default_equipment})
+      ON CONFLICT (movement_id, equipment) DO NOTHING
+    `
+  }
+  return { ok: true, id: inserted!.id, name: inserted!.name }
+}
+
+function movementDefaultsFromExercise(
+  exercise: PrescribedExercise,
+): MovementPrescriptionDefaults {
+  return {
+    variantId: exercise.variantId ?? null,
+    equipment: exercise.equipment ?? null,
+    setCount: exercise.setCount,
+    repsMin: exercise.repsMin,
+    repsMax: exercise.repsMax ?? null,
+    perSetEnabled: Boolean(exercise.perSetEnabled),
+    setPrescriptions: exercise.setPrescriptions ?? [],
+    method: exercise.method,
+    methodTarget: exercise.methodTarget ?? null,
+    category: exercise.category ?? 'accessory',
+    loadPrescription: exercise.loadPrescription ?? null,
+    tempo: exercise.tempo ?? {},
+    tempoMode: exercise.tempoMode ?? 'default',
+    tempoPerRep: exercise.tempoPerRep ?? [],
+    restAfterSetSeconds: exercise.restAfterSetSeconds ?? null,
+    restAfterExerciseSeconds: exercise.restAfterExerciseSeconds ?? null,
+    notes: exercise.notes ?? null,
+    youtubeUrl: exercise.youtubeUrl ?? null,
+  }
+}
+
+export async function handleSaveMovementDefaults(
+  ctx: AppContext,
+  movementId: string,
+  req: Request,
+) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+
+  const claimed = await claimTrainerMovement(ctx, movementId)
+  if (!claimed.ok) return claimed.response
+
+  const owned = await movementWithVariants(ctx.db, claimed.id)
+  if (!owned) return error('Movement not found', 404)
+
+  const body = (await req.json()) as Partial<MovementPrescriptionDefaults>
+  const variantId =
+    owned.variants.find((variant) => variant.equipment === (body.equipment ?? null))?.id ??
+    owned.variants.find((variant) => variant.id === body.variantId)?.id ??
+    null
+  const exercise: PrescribedExercise = {
+    movementId: claimed.id,
+    movementName: claimed.name,
+    variantId,
+    equipment: body.equipment ?? null,
+    setCount: body.setCount as number,
+    repsMin: body.repsMin as number,
+    repsMax: body.repsMax ?? null,
+    perSetEnabled: Boolean(body.perSetEnabled),
+    setPrescriptions: body.setPrescriptions ?? [],
+    method: body.method as SetMethod,
+    methodTarget: body.methodTarget ?? null,
+    category: body.category ?? 'accessory',
+    loadPrescription: body.loadPrescription ?? null,
+    tempo: body.tempo ?? {},
+    tempoMode: body.tempoMode ?? 'default',
+    tempoPerRep: body.tempoPerRep ?? [],
+    restAfterSetSeconds: body.restAfterSetSeconds ?? null,
+    restAfterExerciseSeconds: body.restAfterExerciseSeconds ?? null,
+    notes: body.notes ?? null,
+    youtubeUrl: body.youtubeUrl ?? null,
+  }
+  if (
+    !validSessionPrescription({ warmup: '', exercises: [exercise] }) ||
+    !CATEGORY_VALUES.includes(exercise.category as ExerciseCategory) ||
+    (exercise.equipment != null && !EQUIPMENT_VALUES.includes(exercise.equipment))
+  ) {
+    return error('Invalid movement defaults')
+  }
+
+  const defaults = movementDefaultsFromExercise(exercise)
+  const payload = JSON.stringify(defaults)
+  await ctx.db.sql`
+    INSERT INTO trainer_movement_defaults (trainer_id, movement_id, defaults)
+    VALUES (${ctx.trainer!.id}, ${claimed.id}, CAST(${payload} AS jsonb))
+    ON CONFLICT (trainer_id, movement_id)
+    DO UPDATE SET defaults = EXCLUDED.defaults, updated_at = NOW()
+  `
+  if (movementId !== claimed.id) {
+    await ctx.db.sql`
+      DELETE FROM trainer_movement_defaults
+      WHERE trainer_id = ${ctx.trainer!.id} AND movement_id = ${movementId}
+    `
+  }
+  const movement = await movementForTrainer(ctx, claimed.id)
+  if (!movement) return error('Could not save movement defaults', 500)
+  return json(movement)
+}
+
+export async function handleDeleteMovementDefaults(ctx: AppContext, movementId: string) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  await ctx.db.sql`
+    DELETE FROM trainer_movement_defaults
+    WHERE trainer_id = ${ctx.trainer!.id} AND movement_id = ${movementId}
+  `
+  return new Response(null, { status: 204 })
 }
 
 type TemplateRow = {
@@ -1638,6 +2062,7 @@ export async function handleTrainerClients(ctx: AppContext) {
     name: string
     email: string
     upcoming_count: string
+    last_session_date: string | null
   }>`
     SELECT
       c.id,
@@ -1649,7 +2074,11 @@ export async function handleTrainerClients(ctx: AppContext) {
         WHERE s.client_id = c.id
           AND s.status = 'assigned'
           AND s.scheduled_date >= CURRENT_DATE
-      ) AS upcoming_count
+      ) AS upcoming_count,
+      (
+        SELECT MAX(s.scheduled_date)::text FROM sessions s
+        WHERE s.client_id = c.id
+      ) AS last_session_date
     FROM clients c
     JOIN users u ON u.id = c.user_id
     WHERE c.trainer_id = ${ctx.trainer!.id}
@@ -1662,6 +2091,7 @@ export async function handleTrainerClients(ctx: AppContext) {
       name: r.name,
       email: r.email,
       upcomingCount: Number(r.upcoming_count),
+      lastSessionDate: r.last_session_date,
     })),
   )
 }
@@ -1991,12 +2421,12 @@ export async function handleUpdateSession(ctx: AppContext, id: string, req: Requ
 }
 
 export async function handleLogSession(ctx: AppContext, id: string, req: Request) {
-  const denied = requireClient(ctx)
-  if (denied) return denied
   const rows = await ctx.db.sql<SessionRow>`
-    SELECT * FROM sessions WHERE id = ${id} AND client_id = ${ctx.client!.id}
+    SELECT * FROM sessions WHERE id = ${id}
   `
-  if (!rows[0]) return error('Session not found', 404)
+  if (!rows[0] || !(await canViewSession(ctx, rows[0]))) {
+    return error('Session not found', 404)
+  }
   const body = (await req.json()) as {
     logs?: SetLog[]
     durationSeconds?: number | null

@@ -40,6 +40,17 @@ function HomeIcon() {
   )
 }
 
+function ClientsIcon() {
+  return (
+    <Glyph>
+      <circle cx="9" cy="8" r="3" />
+      <path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" />
+      <circle cx="17" cy="8.5" r="2.5" />
+      <path d="M15.2 14.2c1.7.6 2.8 2.1 2.8 4.8" />
+    </Glyph>
+  )
+}
+
 function WorkoutsIcon() {
   return (
     <Glyph>
@@ -57,6 +68,16 @@ function ProgramsIcon() {
   )
 }
 
+function MovementsIcon() {
+  return (
+    <Glyph>
+      <circle cx="7" cy="7" r="2" />
+      <circle cx="17" cy="17" r="2" />
+      <path d="m8.5 8.5 7 7M13 6l5 5M6 13l5 5" />
+    </Glyph>
+  )
+}
+
 function ProfileIcon() {
   return (
     <Glyph>
@@ -66,17 +87,8 @@ function ProfileIcon() {
   )
 }
 
-function LogoutIcon() {
-  return (
-    <Glyph>
-      <path d="M14.5 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8.5" />
-      <path d="M13.5 12H21m0 0-2.75-2.75M21 12l-2.75 2.75" />
-    </Glyph>
-  )
-}
-
 export function AppShell() {
-  const { me, logout } = useAuth()
+  const { me } = useAuth()
   const role = me?.user.role
   const accentColor = me?.user.accentColor ?? '#c6f54e'
 
@@ -84,8 +96,10 @@ export function AppShell() {
     { to: '/', label: 'Home', icon: <HomeIcon />, end: true },
     ...(role === 'trainer'
       ? [
+          { to: '/clients', label: 'Clients', icon: <ClientsIcon /> },
           { to: '/workouts', label: 'Workouts', icon: <WorkoutsIcon /> },
           { to: '/programs', label: 'Programs', icon: <ProgramsIcon /> },
+          { to: '/movements', label: 'Movements', icon: <MovementsIcon /> },
         ]
       : []),
     { to: '/profile', label: 'Profile', icon: <ProfileIcon /> },
@@ -119,13 +133,6 @@ export function AppShell() {
                 {item.label}
               </NavLink>
             ))}
-            <button
-              type="button"
-              onClick={() => void logout()}
-              className="text-muted hover:text-white"
-            >
-              Log out
-            </button>
           </nav>
         </div>
       </header>
@@ -151,14 +158,6 @@ export function AppShell() {
               {item.label}
             </NavLink>
           ))}
-          <button
-            type="button"
-            onClick={() => void logout()}
-            className="flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-[11px] text-muted"
-          >
-            <LogoutIcon />
-            Log out
-          </button>
         </div>
       </nav>
     </div>

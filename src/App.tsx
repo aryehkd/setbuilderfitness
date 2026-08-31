@@ -4,6 +4,7 @@ import { AppShell } from './components/AppShell.tsx'
 import { DevBar } from './components/DevBar.tsx'
 import { useAuth } from './lib/auth.tsx'
 import { ClientDetailPage } from './pages/ClientDetailPage.tsx'
+import { ClientListPage } from './pages/ClientListPage.tsx'
 import { ClientHomePage } from './pages/ClientHomePage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { OnboardingPage } from './pages/OnboardingPage.tsx'
@@ -16,6 +17,7 @@ import { WorkoutListPage } from './pages/WorkoutListPage.tsx'
 import { ProgramListPage } from './pages/ProgramListPage.tsx'
 import { ProgramEditorPage } from './pages/ProgramEditorPage.tsx'
 import { ProgramSessionEditorPage } from './pages/ProgramSessionEditorPage.tsx'
+import { SavedMovementsPage } from './pages/SavedMovementsPage.tsx'
 
 function Loading() {
   return <div className="flex min-h-svh items-center justify-center text-muted">Loading…</div>
@@ -137,6 +139,14 @@ export default function App() {
           }
         />
         <Route
+          path="/movements"
+          element={
+            <TrainerOnly>
+              <SavedMovementsPage />
+            </TrainerOnly>
+          }
+        />
+        <Route
           path="/programs"
           element={
             <TrainerOnly>
@@ -157,6 +167,14 @@ export default function App() {
           element={
             <TrainerOnly>
               <ProgramSessionEditorPage />
+            </TrainerOnly>
+          }
+        />
+        <Route
+          path="/clients"
+          element={
+            <TrainerOnly>
+              <ClientListPage />
             </TrainerOnly>
           }
         />

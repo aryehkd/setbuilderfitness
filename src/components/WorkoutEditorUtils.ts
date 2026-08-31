@@ -2,6 +2,8 @@ import type {
   Equipment,
   ExerciseCategory,
   Movement,
+  MovementPrescriptionDefaults,
+  PrescribedExercise,
   SetMethod,
   SetPrescription,
   Tempo,
@@ -44,6 +46,58 @@ export function movementDefaults(movement: Movement) {
     variantId: variant?.id ?? null,
     equipment,
     category: movement.defaultCategory ?? 'accessory',
+  }
+}
+
+export function prescriptionDefaultsForMovement(
+  movement: Movement,
+): MovementPrescriptionDefaults {
+  if (movement.savedDefaults) return movement.savedDefaults
+  const defaults = movementDefaults(movement)
+  return {
+    variantId: defaults.variantId,
+    equipment: defaults.equipment,
+    setCount: 3,
+    repsMin: 8,
+    repsMax: null,
+    perSetEnabled: false,
+    setPrescriptions: [],
+    method: 'straight',
+    methodTarget: null,
+    category: defaults.category,
+    loadPrescription: null,
+    tempo: {},
+    tempoMode: 'default',
+    tempoPerRep: [],
+    restAfterSetSeconds: 90,
+    restAfterExerciseSeconds: 90,
+    notes: null,
+    youtubeUrl: movement.youtubeUrl,
+  }
+}
+
+export function movementDefaultsFromPrescription(
+  exercise: PrescribedExercise,
+): MovementPrescriptionDefaults {
+  return {
+    variantId: exercise.variantId ?? null,
+    equipment: exercise.equipment ?? null,
+    setCount: exercise.setCount,
+    repsMin: exercise.repsMin,
+    repsMax: exercise.repsMax ?? null,
+    perSetEnabled: Boolean(exercise.perSetEnabled),
+    setPrescriptions: exercise.setPrescriptions ?? [],
+    method: exercise.method,
+    methodTarget: exercise.methodTarget ?? null,
+    category: exercise.category ?? 'accessory',
+    loadPrescription: exercise.loadPrescription ?? null,
+    tempo: exercise.tempo ?? {},
+    tempoMode: exercise.tempoMode ?? 'default',
+    tempoPerRep: exercise.tempoPerRep ?? [],
+    restAfterSetSeconds: exercise.restAfterSetSeconds ?? null,
+    restAfterExerciseSeconds: exercise.restAfterExerciseSeconds ?? null,
+    notes: exercise.notes ?? null,
+    youtubeUrl: exercise.youtubeUrl ?? null,
   }
 }
 

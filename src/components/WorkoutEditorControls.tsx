@@ -38,12 +38,12 @@ export function ModeToggle<T extends string>({
   onChange: (next: T) => void
 }) {
   return (
-    <div className="inline-flex rounded-xl border border-line p-1 text-sm">
+    <div className="inline-flex shrink-0 rounded-xl border border-line p-1 text-sm">
       {options.map((option) => (
         <button
           key={option.value}
           type="button"
-          className={`min-h-11 rounded-lg px-3 py-1.5 sm:px-4 ${
+          className={`min-h-11 whitespace-nowrap rounded-lg px-3 py-1.5 sm:px-4 ${
             value === option.value ? 'bg-lime text-accent-contrast' : 'text-muted'
           }`}
           onClick={() => onChange(option.value)}

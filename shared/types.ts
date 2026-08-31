@@ -69,6 +69,27 @@ export type SetPrescription = {
   loadPrescription?: string | null
 }
 
+export type MovementPrescriptionDefaults = {
+  variantId?: string | null
+  equipment?: Equipment | null
+  setCount: number
+  repsMin: number
+  repsMax?: number | null
+  perSetEnabled?: boolean
+  setPrescriptions?: SetPrescription[]
+  method: SetMethod
+  methodTarget?: number | null
+  category?: ExerciseCategory | null
+  loadPrescription?: string | null
+  tempo?: Tempo
+  tempoMode?: TempoMode
+  tempoPerRep?: Tempo[]
+  restAfterSetSeconds?: number | null
+  restAfterExerciseSeconds?: number | null
+  notes?: string | null
+  youtubeUrl?: string | null
+}
+
 export type PrescribedExercise = {
   movementId: string
   movementName: string
@@ -106,13 +127,22 @@ export type MovementVariant = {
 
 export type Movement = {
   id: string
+  source: 'shared' | 'trainer'
+  sourceExerciseId: string | null
   name: string
+  description: string | null
+  difficulty: number | null
+  libraryCategory: string | null
   aliases: string[]
   muscleGroups: string[]
+  primaryMuscle: string | null
+  secondaryMuscles: string[]
+  muscleIntensity: Record<string, string>
   youtubeUrl: string | null
   defaultCategory: ExerciseCategory | null
   defaultEquipment: Equipment | null
   variants: MovementVariant[]
+  savedDefaults: MovementPrescriptionDefaults | null
 }
 
 export type TemplateExercise = {
@@ -254,6 +284,7 @@ export type TrainerClient = {
   name: string
   email: string
   upcomingCount: number
+  lastSessionDate: string | null
 }
 
 export type ActivityDay = {

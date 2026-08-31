@@ -10,6 +10,7 @@ import {
 } from '../components/PrescribedExerciseCard.tsx'
 import { SessionPrescriptionEditor } from '../components/SessionPrescriptionEditor.tsx'
 import { VersionHistory } from '../components/VersionHistory.tsx'
+import { ModeToggle } from '../components/WorkoutEditorControls.tsx'
 import { useMovementHistoryContext } from '../hooks/useMovementHistoryContext.ts'
 import { api } from '../lib/api.ts'
 import { useAuth } from '../lib/auth.tsx'
@@ -22,6 +23,8 @@ import type {
 } from '../../shared/types.ts'
 import { setLogIsCompleted, warmupToText } from '../../shared/types.ts'
 
+type TrainerMode = 'workout' | 'log'
+
 export function SessionDetailPage() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -32,6 +35,7 @@ export function SessionDetailPage() {
   const [historyFor, setHistoryFor] = useState<string | null>(null)
   const [history, setHistory] = useState<ExerciseHistoryEntry[]>([])
   const [editing, setEditing] = useState(false)
+  const [trainerMode, setTrainerMode] = useState<TrainerMode>('workout')
   const [draft, setDraft] = useState<{ name: string; prescription: Prescription } | null>(null)
   const [movements, setMovements] = useState<Movement[]>([])
   const [savingAssignment, setSavingAssignment] = useState(false)
@@ -56,6 +60,9 @@ export function SessionDetailPage() {
     setDuration(
       data.loggedDurationSeconds ? String(Math.round(data.loggedDurationSeconds / 60)) : '',
     )
+    if (me?.user.role !== 'client') {
+      setTrainerMode(data.logs.length > 0 ? 'log' : 'workout')
+    }
   }
 
   useEffect(() => {
@@ -90,13 +97,19 @@ export function SessionDetailPage() {
         status,
       }),
     })
-    setSession(updated)
+    setSession({
+      ...updated,
+      clientName: session.clientName ?? updated.clientName,
+    })
   }
 
   const openHistory = async (movementId: string) => {
+    if (!session) return
     setHistoryFor(movementId)
+    const query = new URLSearchParams({ movementId })
+    if (!isClient && session.clientId) query.set('clientId', session.clientId)
     const rows = await api<ExerciseHistoryEntry[]>(
-      `/api/exercise-history?movementId=${movementId}`,
+      `/api/exercise-history?${query.toString()}`,
     )
     setHistory(rows)
   }
@@ -153,6 +166,7 @@ export function SessionDetailPage() {
 
   const assignmentEditable =
     !isClient && session.status === 'assigned' && session.logs.length === 0
+  const canLog = isClient || trainerMode === 'log'
 
   if (editing && draft) {
     return (
@@ -229,12 +243,15 @@ export function SessionDetailPage() {
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm text-muted">{session.scheduledDate}</p>
+          <p className="text-sm text-muted">
+            {session.scheduledDate}
+            {!isClient && session.clientName ? ` · ${session.clientName}` : ''}
+          </p>
           <h1 className="break-words font-display text-2xl font-bold sm:text-3xl">{session.name}</h1>
           <p className="text-xs uppercase text-muted">{session.status}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {assignmentEditable && (
+          {assignmentEditable && trainerMode === 'workout' && (
             <Button type="button" onClick={() => void startEditing()}>
               Edit assigned workout
             </Button>
@@ -249,11 +266,22 @@ export function SessionDetailPage() {
         </div>
       </div>
 
-      {!isClient && !assignmentEditable && (
+      {!isClient ? (
+        <ModeToggle
+          value={trainerMode}
+          options={[
+            { value: 'workout', label: 'Workout' },
+            { value: 'log', label: 'Log results' },
+          ]}
+          onChange={setTrainerMode}
+        />
+      ) : null}
+
+      {!isClient && trainerMode === 'workout' && !assignmentEditable && (
         <Card>
           <p className="text-sm text-muted">
-            This assigned workout is locked because client logging has started or the session is
-            no longer assigned.
+            This assigned workout is locked because logging has started or the session is no longer
+            assigned.
           </p>
         </Card>
       )}
@@ -272,7 +300,7 @@ export function SessionDetailPage() {
             <PrescribedExerciseCard
               exercise={ex}
               actions={
-                isClient && (
+                canLog && (
                   <Button variant="ghost" onClick={() => void openHistory(ex.movementId)}>
                     History
                   </Button>
@@ -293,7 +321,7 @@ export function SessionDetailPage() {
                       <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)]">
                         <span className="text-xs text-muted">Set {setIndex + 1}</span>
                         <TextInput
-                          disabled={!isClient}
+                          disabled={!canLog}
                           placeholder="Weight"
                           value={log?.weight ?? ''}
                           onChange={(e) =>
@@ -303,7 +331,7 @@ export function SessionDetailPage() {
                           }
                         />
                         <TextInput
-                          disabled={!isClient}
+                          disabled={!canLog}
                           className="col-start-2 sm:col-start-auto"
                           placeholder={
                             ex.perSetEnabled
@@ -350,7 +378,7 @@ export function SessionDetailPage() {
         )
       })}
 
-      {isClient && (
+      {canLog && (
         <Card className="space-y-3">
           <Field label="Total workout time (minutes)">
             <TextInput value={duration} onChange={(e) => setDuration(e.target.value)} />
@@ -359,11 +387,15 @@ export function SessionDetailPage() {
             <Button className="w-full sm:w-auto" variant="ghost" onClick={() => void save()}>
               Save log
             </Button>
-            <Button className="w-full sm:w-auto" onClick={() => void save('completed')}>Mark completed</Button>
+            <Button className="w-full sm:w-auto" onClick={() => void save('completed')}>
+              Mark completed
+            </Button>
           </div>
         </Card>
       )}
-      {!isClient ? <VersionHistory events={session.versionHistory} /> : null}
+      {!isClient && trainerMode === 'workout' ? (
+        <VersionHistory events={session.versionHistory} />
+      ) : null}
     </div>
   )
 }

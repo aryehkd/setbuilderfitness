@@ -22,7 +22,7 @@ function draftFromMe(me: MeResponse): ProfileDraft {
 }
 
 export function ProfilePage() {
-  const { me, refreshMe } = useAuth()
+  const { me, refreshMe, logout } = useAuth()
   const year = new Date().getFullYear()
   const isClient = me?.user.role === 'client'
   const [days, setDays] = useState<ActivityDay[]>([])
@@ -141,6 +141,9 @@ export function ProfilePage() {
           )}
         </>
       )}
+      <Button variant="ghost" className="w-full sm:w-auto" onClick={() => void logout()}>
+        Log out
+      </Button>
     </div>
   )
 }

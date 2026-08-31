@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import {
   Button,
   Card,
@@ -11,10 +11,12 @@ import {
   TextInput,
 } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
+import { materializeMovement, replaceCatalogMovement } from '../lib/movements.ts'
 import type {
   Equipment,
   ExerciseCategory,
   Movement,
+  MovementPrescriptionDefaults,
   TrainerClient,
   SetMethod,
   Tempo,
@@ -26,6 +28,7 @@ import type {
 } from '../../shared/types.ts'
 import { warmupToText } from '../../shared/types.ts'
 import { AddMovementSlot } from '../components/AddMovementSlot.tsx'
+import { AssignWorkoutToDate } from '../components/AssignWorkoutToDate.tsx'
 import { VersionHistory } from '../components/VersionHistory.tsx'
 import {
   ClientHistorySelector,
@@ -48,11 +51,11 @@ import {
   CATEGORIES,
   EQUIPMENT,
   METHODS,
-  movementDefaults,
   allowsPerRepTempo,
   fallbackSetPrescription,
   quantityLabel,
   quantityDefaultsForMethod,
+  prescriptionDefaultsForMovement,
   resettleSuperset,
   resizeSetPrescriptions,
   resizeTempoPerRep,
@@ -61,27 +64,61 @@ import {
 } from '../components/WorkoutEditorUtils.ts'
 
 function emptyExercise(movement: Movement): Partial<TemplateExercise> {
-  const defaults = movementDefaults(movement)
+  const defaults = prescriptionDefaultsForMovement(movement)
   return {
     movementId: movement.id,
     movementName: movement.name,
     variantId: defaults.variantId,
     equipment: defaults.equipment,
-    setCount: 3,
-    repsMin: 8,
-    repsMax: null,
-    perSetEnabled: false,
-    setPrescriptions: [],
-    method: 'straight',
+    setCount: defaults.setCount,
+    repsMin: defaults.repsMin,
+    repsMax: defaults.repsMax ?? null,
+    perSetEnabled: Boolean(defaults.perSetEnabled),
+    setPrescriptions: defaults.setPrescriptions ?? [],
+    method: defaults.method,
+    methodTarget: defaults.methodTarget ?? null,
     category: defaults.category,
-    loadPrescription: null,
-    tempoMode: 'default',
-    tempoPerRep: [],
+    loadPrescription: defaults.loadPrescription ?? null,
+    tempoEccentric: defaults.tempo?.eccentric ?? null,
+    tempoPauseBottom: defaults.tempo?.pauseBottom ?? null,
+    tempoConcentric: defaults.tempo?.concentric ?? null,
+    tempoPauseTop: defaults.tempo?.pauseTop ?? null,
+    tempoMode: defaults.tempoMode ?? 'default',
+    tempoPerRep: defaults.tempoPerRep ?? [],
     supersetGroup: null,
     supersetOrder: null,
-    restAfterSetSeconds: 90,
-    restAfterExerciseSeconds: 90,
-    youtubeUrl: movement.youtubeUrl,
+    restAfterSetSeconds: defaults.restAfterSetSeconds ?? null,
+    restAfterExerciseSeconds: defaults.restAfterExerciseSeconds ?? null,
+    notes: defaults.notes ?? null,
+    youtubeUrl: defaults.youtubeUrl ?? null,
+  }
+}
+
+function defaultsFromTemplateExercise(exercise: TemplateExercise): MovementPrescriptionDefaults {
+  return {
+    variantId: exercise.variantId,
+    equipment: exercise.equipment,
+    setCount: exercise.setCount,
+    repsMin: exercise.repsMin,
+    repsMax: exercise.repsMax,
+    perSetEnabled: exercise.perSetEnabled,
+    setPrescriptions: exercise.setPrescriptions,
+    method: exercise.method,
+    methodTarget: exercise.methodTarget,
+    category: exercise.category,
+    loadPrescription: exercise.loadPrescription,
+    tempo: {
+      eccentric: exercise.tempoEccentric,
+      pauseBottom: exercise.tempoPauseBottom,
+      concentric: exercise.tempoConcentric,
+      pauseTop: exercise.tempoPauseTop,
+    },
+    tempoMode: exercise.tempoMode,
+    tempoPerRep: exercise.tempoPerRep,
+    restAfterSetSeconds: exercise.restAfterSetSeconds,
+    restAfterExerciseSeconds: exercise.restAfterExerciseSeconds,
+    notes: exercise.notes,
+    youtubeUrl: exercise.youtubeUrl,
   }
 }
 
@@ -418,10 +455,12 @@ function BlockDragHelp() {
 
 export function TemplateEditorPage() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const [template, setTemplate] = useState<WorkoutTemplate | null>(null)
   const [movements, setMovements] = useState<Movement[]>([])
   const [clients, setClients] = useState<TrainerClient[]>([])
   const [selectedClientId, setSelectedClientId] = useState('')
+  const [assignClientId, setAssignClientId] = useState('')
   const [openSlot, setOpenSlot] = useState<string | null>(null)
   const [requestedView, setView] = useState<EditorView>('edit')
   const [tableAllowed, setTableAllowed] = useState(
@@ -491,6 +530,12 @@ export function TemplateEditorPage() {
     setSaving(false)
   }
 
+  const removeTemplate = async () => {
+    if (!id) return
+    await api(`/api/templates/${id}`, { method: 'DELETE' })
+    navigate('/workouts')
+  }
+
   const assignSuperset = async (exerciseId: string, group: string | null) => {
     if (!id || !template) return
     const current = exercises.find((item) => item.id === exerciseId)
@@ -557,10 +602,16 @@ export function TemplateEditorPage() {
     if (!id) return
     setSaving(true)
     try {
+      const selectedMovement = await materializeMovement(movement)
+      if (selectedMovement.id !== movement.id) {
+        setMovements((current) =>
+          current.map((item) => (item.id === movement.id ? selectedMovement : item)),
+        )
+      }
       const created = await api<TemplateExercise>(`/api/templates/${id}/exercises`, {
         method: 'POST',
         body: JSON.stringify({
-          ...emptyExercise(movement),
+          ...emptyExercise(selectedMovement),
           supersetGroup: slot.group,
           supersetOrder: slot.group ? 1 : null,
         }),
@@ -603,6 +654,29 @@ export function TemplateEditorPage() {
       body: JSON.stringify(ex),
     })
     await load()
+  }
+
+  const saveMovementDefault = async (ex: TemplateExercise) => {
+    const claimed = await api<Movement>(
+      `/api/movements/${ex.movementId}/defaults`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(defaultsFromTemplateExercise(ex)),
+      },
+    )
+    setMovements((current) =>
+      replaceCatalogMovement(current, { id: ex.movementId, sourceExerciseId: claimed.sourceExerciseId }, claimed),
+    )
+    if (
+      claimed.id !== ex.movementId ||
+      (claimed.savedDefaults?.variantId && claimed.savedDefaults.variantId !== ex.variantId)
+    ) {
+      await saveExercise({
+        ...ex,
+        movementId: claimed.id,
+        variantId: claimed.savedDefaults?.variantId ?? ex.variantId,
+      })
+    }
   }
 
   const patchExercise = (exerciseId: string, patch: Partial<TemplateExercise>, persist = false) => {
@@ -735,6 +809,14 @@ export function TemplateEditorPage() {
   if (!template) return <p className="p-6 text-muted">Loading workout…</p>
 
   const warmup = warmupToText(template.warmup)
+  const assignBlock = (
+    <AssignWorkoutToDate
+      clients={clients}
+      clientId={assignClientId}
+      onClientIdChange={setAssignClientId}
+      templateId={template.id}
+    />
+  )
   const clientHistoryControls = (
     <Card className="space-y-2">
       <ClientHistorySelector
@@ -780,6 +862,13 @@ export function TemplateEditorPage() {
           onChange={setView}
         />
         <span className="text-xs text-muted">{saving ? 'Saving…' : 'Saved'}</span>
+        <ConfirmButton
+          className="w-full sm:w-auto"
+          confirmLabel="Confirm delete"
+          onConfirm={() => void removeTemplate()}
+        >
+          Delete
+        </ConfirmButton>
       </div>
     </div>
   )
@@ -852,6 +941,7 @@ export function TemplateEditorPage() {
             )
           })
         )}
+      {assignBlock}
       <VersionHistory events={template.versionHistory} />
       </div>
     )
@@ -1143,6 +1233,7 @@ export function TemplateEditorPage() {
                                 onAssignSuperset={(groupName) =>
                                   void assignSuperset(ex.id, groupName)
                                 }
+                                onSaveDefault={() => void saveMovementDefault(ex)}
                                 onRemove={() => void removeExercise(ex.id)}
                               />
                             </td>
@@ -1174,7 +1265,8 @@ export function TemplateEditorPage() {
             Edit common fields in the table. Open Details for methods, set-specific targets,
             per-rep tempo, supersets, equipment, links, and removal.
           </p>
-          <VersionHistory events={template.versionHistory} />
+          {assignBlock}
+      <VersionHistory events={template.versionHistory} />
         </div>
       </div>
     )
@@ -1254,6 +1346,7 @@ export function TemplateEditorPage() {
                 }
                 onPatch={patchExercise}
                 onAssignSuperset={(groupName) => void assignSuperset(ex.id, groupName)}
+                onSaveDefault={() => void saveMovementDefault(ex)}
                 onRemove={() => void removeExercise(ex.id)}
               />
               {group &&
@@ -1290,6 +1383,7 @@ export function TemplateEditorPage() {
           )
         })}
       </div>
+      {assignBlock}
       <VersionHistory events={template.versionHistory} />
     </div>
   )
@@ -1304,6 +1398,7 @@ function ExerciseCard({
   historyContext,
   onPatch,
   onAssignSuperset,
+  onSaveDefault,
   onRemove,
 }: {
   exercise: TemplateExercise
@@ -1314,6 +1409,7 @@ function ExerciseCard({
   historyContext?: ReactNode
   onPatch: (id: string, patch: Partial<TemplateExercise>, persist?: boolean) => void
   onAssignSuperset: (group: string | null) => void
+  onSaveDefault: () => void
   onRemove: () => void
 }) {
   const [tempoOpen, setTempoOpen] = useState(() => hasConfiguredTempo(ex))
@@ -1437,6 +1533,9 @@ function ExerciseCard({
         </div>
         <div className="flex flex-wrap gap-2 sm:justify-end">
           {reorderControls}
+          <Button variant="ghost" onClick={onSaveDefault}>
+            save config as default
+          </Button>
           <ConfirmButton onConfirm={onRemove} question="Remove this movement?">
             Remove
           </ConfirmButton>

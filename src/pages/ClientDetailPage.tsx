@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Heatmap } from '../components/Heatmap.tsx'
 import { MovementHistorySearch } from '../components/MovementHistorySearch.tsx'
-import { Button, Card, ConfirmLink, Field, TextInput } from '../components/ui.tsx'
+import { AssignWorkoutToDate } from '../components/AssignWorkoutToDate.tsx'
+import { Button, Card, ConfirmLink, DateInput, Field } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
 import type {
   ActivityDay,
@@ -46,14 +47,6 @@ export function ClientDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
-  const assign = async () => {
-    await api('/api/sessions', {
-      method: 'POST',
-      body: JSON.stringify({ clientId: id, templateId, date }),
-    })
-    await load()
-  }
-
   const assignProgram = async () => {
     if (!id || !programId) return
     await api(`/api/programs/${programId}/assign`, {
@@ -71,37 +64,21 @@ export function ClientDetailPage() {
         <h2 className="mb-4 font-semibold">{year} Completed sessions</h2>
         <Heatmap year={year} days={activity} />
       </Card>
-      <Card className="space-y-3">
-        <h2 className="font-semibold">Assign a workout to a date</h2>
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Workout">
-            <select
-              className="w-full rounded-xl border border-line bg-ink px-3 py-2.5 text-sm"
-              value={templateId}
-              onChange={(e) => setTemplateId(e.target.value)}
-            >
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Date">
-            <TextInput type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-          </Field>
-          <div className="flex items-end">
-            <Button className="w-full sm:w-auto" disabled={!templateId} onClick={() => void assign()}>
-              Assign
-            </Button>
-          </div>
-        </div>
-      </Card>
+      {id ? (
+        <AssignWorkoutToDate
+          templates={templates}
+          templateId={templateId}
+          onTemplateIdChange={setTemplateId}
+          clientId={id}
+          onAssigned={load}
+        />
+      ) : null}
       <Card className="space-y-3">
         <h2 className="font-semibold">Assign a program</h2>
         <p className="text-sm text-muted">
           Places every program workout on the client calendar, starting the week of the date you
-          pick. Each day is a unique assigned workout.
+          pick. Each day is a unique assigned workout you can edit on its own. Later edits to the
+          program or its templates do not apply to sessions already assigned.
         </p>
         <div className="grid gap-3 sm:grid-cols-3">
           <Field label="Program">
@@ -118,7 +95,7 @@ export function ClientDetailPage() {
             </select>
           </Field>
           <Field label="Start week">
-            <TextInput type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <DateInput value={date} onChange={(e) => setDate(e.target.value)} />
           </Field>
           <div className="flex items-end">
             <Button

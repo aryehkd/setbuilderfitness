@@ -10,6 +10,7 @@ import {
   handleCreateProgram,
   handleCreateTemplate,
   handleDeleteExercise,
+  handleDeleteMovementDefaults,
   handleDeleteProgram,
   handleDeleteProgramSession,
   handleDeleteSession,
@@ -28,10 +29,12 @@ import {
   handleListTemplates,
   handleLoggedMovements,
   handleLogSession,
+  handleMaterializeSharedMovement,
   handleMovements,
   handleOnboarding,
   handlePastWorkouts,
   handleReorderExercises,
+  handleSaveMovementDefaults,
   handleTrainerClients,
   handleTrainerLookup,
   handleUpdateProfile,
@@ -62,6 +65,22 @@ export default async (req: Request) => {
       const loaded = await loadContext(req)
       if (!loaded.ok) return loaded.response
       return await handleCreateMovement(loaded.ctx, req)
+    }
+    if (path === '/api/movements/materialize' && req.method === 'POST') {
+      const loaded = await loadContext(req)
+      if (!loaded.ok) return loaded.response
+      return await handleMaterializeSharedMovement(loaded.ctx, req)
+    }
+    const movementDefaults = path.match(/^\/api\/movements\/([^/]+)\/defaults$/)
+    if (movementDefaults) {
+      const loaded = await loadContext(req)
+      if (!loaded.ok) return loaded.response
+      if (req.method === 'PUT') {
+        return await handleSaveMovementDefaults(loaded.ctx, movementDefaults[1]!, req)
+      }
+      if (req.method === 'DELETE') {
+        return await handleDeleteMovementDefaults(loaded.ctx, movementDefaults[1]!)
+      }
     }
 
     const loaded = await loadContext(req)

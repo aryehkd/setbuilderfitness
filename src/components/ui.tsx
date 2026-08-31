@@ -168,6 +168,41 @@ export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
   )
 }
 
+/**
+ * Native date field that opens its calendar from anywhere in the input, not
+ * just the small indicator icon. showPicker needs user activation, so the throw
+ * is ignored and typing still works when the browser refuses.
+ */
+export function DateInput({
+  className = '',
+  onClick,
+  onFocus,
+  ...props
+}: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'>) {
+  const openPicker = (input: HTMLInputElement & { showPicker?: () => void }) => {
+    try {
+      input.showPicker?.()
+    } catch {
+      // Ignored: browser declined to open the picker.
+    }
+  }
+  return (
+    <TextInput
+      {...props}
+      type="date"
+      className={`cursor-pointer [color-scheme:dark] ${className}`}
+      onClick={(event) => {
+        openPicker(event.currentTarget)
+        onClick?.(event)
+      }}
+      onFocus={(event) => {
+        openPicker(event.currentTarget)
+        onFocus?.(event)
+      }}
+    />
+  )
+}
+
 export function NumericTextInput({
   value,
   onChange,
