@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Card, Field, TextInput } from './ui.tsx'
 import { movementMatchesQuery } from '../../shared/search.ts'
+import { SpinnerIcon } from './WorkoutEditorControls.tsx'
 import { CATEGORIES, EQUIPMENT } from './WorkoutEditorUtils.ts'
 import type { Equipment, ExerciseCategory, Movement } from '../../shared/types.ts'
 
@@ -18,14 +19,40 @@ export function AddMovementSlot({
   open: boolean
   onOpen: () => void
   onCancel: () => void
-  onSelect: (movement: Movement) => void
-  onCreate: (name: string, category: ExerciseCategory, equipment: Equipment) => void
+  onSelect: (movement: Movement) => void | Promise<void>
+  onCreate: (
+    name: string,
+    category: ExerciseCategory,
+    equipment: Equipment,
+  ) => void | Promise<void>
 }) {
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const [draftName, setDraftName] = useState<string | null>(null)
   const [draftCategory, setDraftCategory] = useState('')
   const [draftEquipment, setDraftEquipment] = useState('')
+  // Which row (or the create form) is waiting on the server, so the click that
+  // started a slow add is visibly acknowledged instead of looking ignored.
+  const [pending, setPending] = useState<string | null>(null)
+  const mounted = useRef(true)
+  useEffect(
+    () => () => {
+      mounted.current = false
+    },
+    [],
+  )
+
+  const runPending = async (key: string, action: () => void | Promise<void>) => {
+    if (pending) return
+    const result = action()
+    if (!(result instanceof Promise)) return
+    setPending(key)
+    try {
+      await result
+    } finally {
+      if (mounted.current) setPending(null)
+    }
+  }
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -43,6 +70,7 @@ export function AddMovementSlot({
       setDraftName(null)
       setDraftCategory('')
       setDraftEquipment('')
+      setPending(null)
     }
   }, [open])
 
@@ -68,7 +96,8 @@ export function AddMovementSlot({
 
   const choose = (index: number) => {
     if (index < matches.length) {
-      onSelect(matches[index]!)
+      const movement = matches[index]!
+      void runPending(movement.id, () => onSelect(movement))
       return
     }
     if (canCreate) startCreate(query.trim())
@@ -83,11 +112,14 @@ export function AddMovementSlot({
   const submitCreate = () => {
     if (!draftName) return
     if (!draftCategory || !draftEquipment) return
-    onCreate(draftName, draftCategory as ExerciseCategory, draftEquipment as Equipment)
+    void runPending('create', () =>
+      onCreate(draftName, draftCategory as ExerciseCategory, draftEquipment as Equipment),
+    )
   }
 
   if (draftName) {
-    const canSave = Boolean(draftCategory && draftEquipment)
+    const saving = pending === 'create'
+    const canSave = Boolean(draftCategory && draftEquipment) && !saving
     return (
       <Card className="space-y-3">
         <div>
@@ -102,6 +134,7 @@ export function AddMovementSlot({
             <select
               className="w-full rounded-xl border border-line bg-ink px-3 py-2.5 text-sm"
               value={draftCategory}
+              disabled={saving}
               onChange={(e) => setDraftCategory(e.target.value)}
             >
               <option value="">Choose category…</option>
@@ -116,6 +149,7 @@ export function AddMovementSlot({
             <select
               className="w-full rounded-xl border border-line bg-ink px-3 py-2.5 text-sm"
               value={draftEquipment}
+              disabled={saving}
               onChange={(e) => setDraftEquipment(e.target.value)}
             >
               <option value="">Choose equipment…</option>
@@ -128,18 +162,32 @@ export function AddMovementSlot({
           </Field>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" disabled={!canSave} onClick={submitCreate}>
-            Add movement
+          <Button
+            type="button"
+            className="gap-2"
+            disabled={!canSave}
+            aria-busy={saving}
+            onClick={submitCreate}
+          >
+            {saving ? <SpinnerIcon /> : null}
+            {saving ? 'Adding…' : 'Add movement'}
           </Button>
           <Button
             type="button"
             variant="ghost"
             className="text-xs"
+            disabled={saving}
             onClick={() => setDraftName(null)}
           >
             Back
           </Button>
-          <Button type="button" variant="ghost" className="text-xs" onClick={onCancel}>
+          <Button
+            type="button"
+            variant="ghost"
+            className="text-xs"
+            disabled={saving}
+            onClick={onCancel}
+          >
             Cancel
           </Button>
         </div>
@@ -177,13 +225,18 @@ export function AddMovementSlot({
           <li key={m.id}>
             <button
               type="button"
-              className={`flex min-h-11 w-full flex-col items-start justify-between gap-1 px-3 py-2 text-left text-sm sm:flex-row sm:items-center sm:gap-2 ${
+              disabled={Boolean(pending)}
+              aria-busy={pending === m.id}
+              className={`flex min-h-11 w-full flex-col items-start justify-between gap-1 px-3 py-2 text-left text-sm disabled:opacity-60 sm:flex-row sm:items-center sm:gap-2 ${
                 i === active ? 'bg-lime/15 text-white' : 'text-muted hover:bg-ink'
               }`}
               onMouseEnter={() => setActive(i)}
-              onClick={() => onSelect(m)}
+              onClick={() => void runPending(m.id, () => onSelect(m))}
             >
-              <span className="min-w-0 break-words font-medium text-white">{m.name}</span>
+              <span className="flex min-w-0 items-center gap-2 break-words font-medium text-white">
+                {pending === m.id ? <SpinnerIcon /> : null}
+                {m.name}
+              </span>
               {m.muscleGroups.length > 0 && (
                 <span className="break-words text-xs text-muted sm:text-right">
                   {m.muscleGroups.join(', ')}
@@ -196,7 +249,8 @@ export function AddMovementSlot({
           <li>
             <button
               type="button"
-              className={`w-full px-3 py-2 text-left text-sm ${
+              disabled={Boolean(pending)}
+              className={`w-full px-3 py-2 text-left text-sm disabled:opacity-60 ${
                 active === matches.length ? 'bg-lime/15 text-white' : 'text-muted hover:bg-ink'
               }`}
               onMouseEnter={() => setActive(matches.length)}
@@ -210,7 +264,13 @@ export function AddMovementSlot({
           <li className="px-3 py-2 text-sm text-muted">No movements match.</li>
         )}
       </ul>
-      <Button type="button" variant="ghost" className="text-xs" onClick={onCancel}>
+      <Button
+        type="button"
+        variant="ghost"
+        className="text-xs"
+        disabled={Boolean(pending)}
+        onClick={onCancel}
+      >
         Cancel
       </Button>
     </Card>

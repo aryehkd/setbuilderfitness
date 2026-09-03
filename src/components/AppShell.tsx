@@ -120,7 +120,7 @@ export function AppShell() {
           <NavLink to="/" className="shrink-0 font-display text-lg font-bold tracking-tight">
             setbuilder<span className="text-lime">.fitness</span>
           </NavLink>
-          <nav className="hidden items-center gap-4 text-sm sm:flex">
+          <nav className="hidden items-center gap-4 text-sm lg:flex">
             {items.map((item) => (
               <NavLink
                 key={item.to}
@@ -137,11 +137,11 @@ export function AppShell() {
         </div>
       </header>
 
-      <div className="pb-[calc(4.5rem+env(safe-area-inset-bottom))] sm:pb-0">
+      <div className="pb-[calc(4.5rem+env(safe-area-inset-bottom))] lg:pb-0">
         <Outlet />
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-panel/95 pb-[env(safe-area-inset-bottom)] backdrop-blur sm:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-panel/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden">
         <div className="flex items-stretch justify-around">
           {items.map((item) => (
             <NavLink

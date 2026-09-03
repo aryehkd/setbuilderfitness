@@ -19,6 +19,8 @@ import { ProgramListPage } from './pages/ProgramListPage.tsx'
 import { ProgramEditorPage } from './pages/ProgramEditorPage.tsx'
 import { ProgramSessionEditorPage } from './pages/ProgramSessionEditorPage.tsx'
 import { SavedMovementsPage } from './pages/SavedMovementsPage.tsx'
+import { SharedProgramPreviewPage } from './pages/SharedProgramPreviewPage.tsx'
+import { SharedWorkoutPreviewPage } from './pages/SharedWorkoutPreviewPage.tsx'
 
 function Loading() {
   return <div className="flex min-h-svh items-center justify-center text-muted">Loading…</div>
@@ -141,6 +143,14 @@ export default function App() {
           }
         />
         <Route
+          path="/shared/workouts/:shareId"
+          element={
+            <TrainerOnly>
+              <SharedWorkoutPreviewPage />
+            </TrainerOnly>
+          }
+        />
+        <Route
           path="/movements"
           element={
             <TrainerOnly>
@@ -161,6 +171,14 @@ export default function App() {
           element={
             <TrainerOnly>
               <ProgramEditorPage />
+            </TrainerOnly>
+          }
+        />
+        <Route
+          path="/shared/programs/:shareId"
+          element={
+            <TrainerOnly>
+              <SharedProgramPreviewPage />
             </TrainerOnly>
           }
         />

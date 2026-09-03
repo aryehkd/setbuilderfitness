@@ -89,6 +89,7 @@ export function SessionPrescriptionEditor({
   movementHistoryLoading = false,
   movementHistoryError = null,
   readOnly = false,
+  showName = true,
   onChange,
 }: {
   name: string
@@ -99,6 +100,8 @@ export function SessionPrescriptionEditor({
   movementHistoryLoading?: boolean
   movementHistoryError?: string | null
   readOnly?: boolean
+  /** Set false when the surrounding page already renders a workout name field. */
+  showName?: boolean
   onChange: (next: { name: string; prescription: Prescription }) => void
 }) {
   const [openSlot, setOpenSlot] = useState<string | null>(null)
@@ -234,9 +237,9 @@ export function SessionPrescriptionEditor({
       open={openSlot === key}
       onOpen={() => setOpenSlot(key)}
       onCancel={() => setOpenSlot(null)}
-      onSelect={(movement) => void insertExercise(index, movement)}
+      onSelect={(movement) => insertExercise(index, movement)}
       onCreate={(name, category, equipment) =>
-        void createAndInsert(index, name, category, equipment)
+        createAndInsert(index, name, category, equipment)
       }
     />
   )
@@ -244,15 +247,17 @@ export function SessionPrescriptionEditor({
   return (
     <fieldset disabled={readOnly} className="space-y-4">
       <Card className="space-y-4">
-        <Field label="Workout name">
-          <TextInput
-            value={name}
-            onChange={(event) => {
-              setDefaultSaveStatus(clearCompletedDefaultSaves)
-              onChange({ name: event.target.value, prescription })
-            }}
-          />
-        </Field>
+        {showName ? (
+          <Field label="Workout name">
+            <TextInput
+              value={name}
+              onChange={(event) => {
+                setDefaultSaveStatus(clearCompletedDefaultSaves)
+                onChange({ name: event.target.value, prescription })
+              }}
+            />
+          </Field>
+        ) : null}
         <Field label="Workout / Warmup Notes">
           <TextArea
             rows={3}
@@ -324,11 +329,14 @@ export function SessionPrescriptionTable({
   name,
   prescription,
   readOnly = false,
+  showName = true,
   onChange,
 }: {
   name: string
   prescription: Prescription
   readOnly?: boolean
+  /** Set false when the surrounding page already renders a workout name field. */
+  showName?: boolean
   onChange: (next: { name: string; prescription: Prescription }) => void
 }) {
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null)
@@ -423,12 +431,14 @@ export function SessionPrescriptionTable({
   return (
     <fieldset disabled={readOnly} className="space-y-4">
       <Card className="space-y-4">
-        <Field label="Workout name">
-          <TextInput
-            value={name}
-            onChange={(event) => onChange({ name: event.target.value, prescription })}
-          />
-        </Field>
+        {showName ? (
+          <Field label="Workout name">
+            <TextInput
+              value={name}
+              onChange={(event) => onChange({ name: event.target.value, prescription })}
+            />
+          </Field>
+        ) : null}
         <Field label="Workout / Warmup Notes">
           <TextArea
             rows={3}

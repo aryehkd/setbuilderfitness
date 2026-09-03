@@ -1,17 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { ShareWithTrainer } from '../components/ShareWithTrainer.tsx'
+import { SharedWithMe } from '../components/SharedWithMe.tsx'
 import { Button, Card, ConfirmLink, TextInput } from '../components/ui.tsx'
 import { api } from '../lib/api.ts'
-import type { WorkoutTemplate } from '../../shared/types.ts'
+import type { LibraryShare, WorkoutTemplate } from '../../shared/types.ts'
 
 export function WorkoutListPage() {
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([])
+  const [shares, setShares] = useState<LibraryShare[]>([])
   const [copyingId, setCopyingId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const navigate = useNavigate()
 
   const load = () => {
     void api<WorkoutTemplate[]>('/api/templates').then(setTemplates)
+    void api<LibraryShare[]>('/api/library-shares?type=workout').then(setShares)
   }
 
   useEffect(() => {
@@ -61,6 +65,14 @@ export function WorkoutListPage() {
           Create workout
         </Button>
       </div>
+      <SharedWithMe
+        type="workout"
+        shares={shares}
+        onDismiss={async (id) => {
+          await api(`/api/library-shares/${id}`, { method: 'DELETE' })
+          load()
+        }}
+      />
       <div className="grid gap-3">
         {filtered.map((t) => (
           <Card key={t.id} className="flex items-center justify-between gap-3">
@@ -78,6 +90,7 @@ export function WorkoutListPage() {
                   })}
                 </span>
               ) : null}
+              <ShareWithTrainer compact path={`/api/templates/${t.id}/share`} />
               <button
                 type="button"
                 className="min-h-11 shrink-0 text-xs text-muted hover:text-white disabled:opacity-50 sm:min-h-0"

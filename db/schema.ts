@@ -264,6 +264,28 @@ export const sessionSetLogs = pgTable(
   (t) => [unique().on(t.sessionId, t.exerciseIndex, t.setIndex)],
 )
 
+export const libraryShares = pgTable(
+  'library_shares',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ownerTrainerId: uuid('owner_trainer_id')
+      .notNull()
+      .references(() => trainers.id, { onDelete: 'cascade' }),
+    recipientTrainerId: uuid('recipient_trainer_id')
+      .notNull()
+      .references(() => trainers.id, { onDelete: 'cascade' }),
+    resourceType: text('resource_type').notNull(),
+    resourceId: uuid('resource_id').notNull(),
+    status: text('status').notNull().default('pending'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('library_shares_recipient_status_idx').on(t.recipientTrainerId, t.status),
+    index('library_shares_owner_idx').on(t.ownerTrainerId),
+  ],
+)
+
 export const adHocLogs = pgTable(
   'ad_hoc_logs',
   {

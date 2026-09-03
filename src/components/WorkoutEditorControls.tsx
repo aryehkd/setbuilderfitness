@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Field, NumericTextInput, Button } from './ui.tsx'
 import type { Tempo } from '../../shared/types.ts'
 
@@ -80,29 +80,57 @@ export function SaveDefaultButton({
   )
 }
 
+/**
+ * Yes/No switch. When onChange returns a promise the chosen side shows a
+ * spinner until it settles, so slow saves are not mistaken for a dead click.
+ */
 export function Toggle({
   value,
   onChange,
 }: {
   value: boolean
-  onChange: (next: boolean) => void
+  onChange: (next: boolean) => void | Promise<void>
 }) {
+  const [pending, setPending] = useState<boolean | null>(null)
+  const mounted = useRef(true)
+  useEffect(
+    () => () => {
+      mounted.current = false
+    },
+    [],
+  )
+
+  const choose = async (next: boolean) => {
+    if (pending != null) return
+    const result = onChange(next)
+    if (!(result instanceof Promise)) return
+    setPending(next)
+    try {
+      await result
+    } finally {
+      if (mounted.current) setPending(null)
+    }
+  }
+
+  const option = (next: boolean, label: string) => (
+    <button
+      type="button"
+      disabled={pending != null}
+      aria-busy={pending === next}
+      className={`inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg px-4 py-1.5 disabled:opacity-60 ${
+        value === next ? 'bg-lime text-accent-contrast' : 'text-muted'
+      }`}
+      onClick={() => void choose(next)}
+    >
+      {pending === next ? <SpinnerIcon /> : null}
+      {label}
+    </button>
+  )
+
   return (
     <div className="inline-flex rounded-xl border border-line p-1 text-sm">
-      <button
-        type="button"
-        className={`min-h-11 rounded-lg px-4 py-1.5 ${!value ? 'bg-lime text-accent-contrast' : 'text-muted'}`}
-        onClick={() => onChange(false)}
-      >
-        No
-      </button>
-      <button
-        type="button"
-        className={`min-h-11 rounded-lg px-4 py-1.5 ${value ? 'bg-lime text-accent-contrast' : 'text-muted'}`}
-        onClick={() => onChange(true)}
-      >
-        Yes
-      </button>
+      {option(false, 'No')}
+      {option(true, 'Yes')}
     </div>
   )
 }

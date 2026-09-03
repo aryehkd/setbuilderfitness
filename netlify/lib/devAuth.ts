@@ -12,6 +12,11 @@ export const DEV_PERSONAS: Record<string, DevPersona> = {
     email: 'trainer@dev.setbuilder.fitness',
     name: 'Dev Trainer',
   },
+  trainer2: {
+    id: 'dev-trainer-2',
+    email: 'trainer2@dev.setbuilder.fitness',
+    name: 'Dev Trainer 2',
+  },
   client: {
     id: 'dev-client',
     email: 'client@dev.setbuilder.fitness',

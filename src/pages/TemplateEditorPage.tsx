@@ -29,7 +29,6 @@ import type {
   SetMethod,
   Tempo,
   TempoMode,
-  PrescribedExercise,
   SetPrescription,
   TemplateExercise,
   WorkoutTemplate,
@@ -37,6 +36,7 @@ import type {
 import { warmupToText } from '../../shared/types.ts'
 import { AddMovementSlot } from '../components/AddMovementSlot.tsx'
 import { AssignWorkoutToDate } from '../components/AssignWorkoutToDate.tsx'
+import { ShareWithTrainer } from '../components/ShareWithTrainer.tsx'
 import { VersionHistory } from '../components/VersionHistory.tsx'
 import {
   ClientHistorySelector,
@@ -45,13 +45,7 @@ import {
   useSelfClientId,
 } from '../components/MovementHistoryContext.tsx'
 import { useMovementHistoryContext } from '../hooks/useMovementHistoryContext.ts'
-import {
-  PrescribedExerciseCard,
-  RestAfterMovement,
-  SupersetFrame,
-  groupBySuperset,
-  setTarget,
-} from '../components/PrescribedExerciseCard.tsx'
+import { WorkoutPrescriptionPreview } from '../components/WorkoutPrescriptionPreview.tsx'
 import {
   ModeToggle,
   SaveDefaultButton,
@@ -75,6 +69,7 @@ import {
   resizeTempoPerRep,
   showsRepsField,
   tempoRepCount,
+  toPrescribedExercise,
   placeInSupersetOrder,
   supersetOrderOptions,
 } from '../components/WorkoutEditorUtils.ts'
@@ -190,38 +185,6 @@ function exerciseBlocks(exercises: TemplateExercise[]): TemplateExercise[][] {
     blocks.push(membersByGroup.get(key) ?? [ex])
   }
   return blocks
-}
-
-function toPrescribed(ex: TemplateExercise): PrescribedExercise {
-  return {
-    movementId: ex.movementId,
-    movementName: ex.movementName ?? '',
-    variantId: ex.variantId,
-    equipment: ex.equipment,
-    setCount: ex.setCount,
-    repsMin: ex.repsMin,
-    repsMax: ex.repsMax,
-    perSetEnabled: ex.perSetEnabled,
-    setPrescriptions: ex.setPrescriptions,
-    method: ex.method,
-    methodTarget: ex.methodTarget,
-    category: ex.category,
-    loadPrescription: ex.loadPrescription,
-    tempo: {
-      eccentric: ex.tempoEccentric,
-      pauseBottom: ex.tempoPauseBottom,
-      concentric: ex.tempoConcentric,
-      pauseTop: ex.tempoPauseTop,
-    },
-    tempoMode: ex.tempoMode,
-    tempoPerRep: ex.tempoPerRep,
-    restAfterSetSeconds: ex.restAfterSetSeconds,
-    restAfterExerciseSeconds: ex.restAfterExerciseSeconds,
-    supersetGroup: ex.supersetGroup,
-    supersetOrder: ex.supersetOrder,
-    notes: ex.notes,
-    youtubeUrl: ex.youtubeUrl,
-  }
 }
 
 type InsertSlot = { key: string; flatIndex: number; group: string | null }
@@ -916,10 +879,8 @@ export function TemplateEditorPage() {
       open={openSlot === slot.key}
       onOpen={() => setOpenSlot(slot.key)}
       onCancel={() => setOpenSlot(null)}
-      onSelect={(movement) => void addExerciseAt(movement, slot)}
-      onCreate={(name, category, equipment) =>
-        void createAndAdd(name, category, equipment, slot)
-      }
+      onSelect={(movement) => addExerciseAt(movement, slot)}
+      onCreate={(name, category, equipment) => createAndAdd(name, category, equipment, slot)}
     />
   )
 
@@ -983,6 +944,7 @@ export function TemplateEditorPage() {
           onChange={changeView}
         />
         <span className="text-xs text-muted">{saving ? 'Saving…' : 'Saved'}</span>
+        <ShareWithTrainer path={`/api/templates/${template.id}/share`} />
         <ConfirmButton
           className="w-full sm:w-auto"
           confirmLabel="Confirm delete"
@@ -1002,66 +964,11 @@ export function TemplateEditorPage() {
           This is how the workout looks to a client. Logging is disabled in the preview.
         </p>
 
-        {warmup ? (
-          <Card>
-            <h2 className="mb-2 font-semibold">Warmup</h2>
-            <p className="whitespace-pre-wrap text-sm">{warmup}</p>
-          </Card>
-        ) : null}
-
-        {exercises.length === 0 ? (
-          <p className="text-muted">No movements yet.</p>
-        ) : (
-          groupBySuperset(exercises).map((block) => {
-            const cards = block.items.map(({ exercise: ex }) => (
-              <Fragment key={ex.id}>
-                <PrescribedExerciseCard exercise={toPrescribed(ex)}>
-                  <div className="space-y-2">
-                    {Array.from({ length: Math.max(0, ex.setCount) }, (_, setIndex) => {
-                      const target = ex.perSetEnabled ? setTarget(toPrescribed(ex), setIndex) : null
-                      return (
-                        <div key={setIndex} className="space-y-1">
-                          {target ? (
-                            <p className="text-xs text-muted">
-                              Set {setIndex + 1}: {target}
-                            </p>
-                          ) : null}
-                          <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 opacity-60 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)]">
-                            <span className="text-xs text-muted">Set {setIndex + 1}</span>
-                            <TextInput placeholder="Weight" disabled value="" readOnly />
-                            <TextInput
-                              className="col-start-2 sm:col-start-auto"
-                              placeholder={
-                                ex.perSetEnabled
-                                  ? (setTarget(toPrescribed(ex), setIndex) ??
-                                    (ex.method === 'timed' ? 'Seconds' : 'Reps'))
-                                  : ex.method === 'timed'
-                                    ? 'Seconds'
-                                    : 'Reps'
-                              }
-                              disabled
-                              value=""
-                              readOnly
-                            />
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </PrescribedExerciseCard>
-                <RestAfterMovement seconds={ex.restAfterExerciseSeconds} />
-              </Fragment>
-            ))
-            if (!block.group) {
-              return <Fragment key={block.items[0]!.exercise.id}>{cards}</Fragment>
-            }
-            return (
-              <SupersetFrame key={`superset-${block.group}`} group={block.group}>
-                {cards}
-              </SupersetFrame>
-            )
-          })
-        )}
+        <WorkoutPrescriptionPreview
+          warmup={warmup}
+          exercises={exercises.map(toPrescribedExercise)}
+          showSetRows
+        />
       {assignBlock}
       <VersionHistory events={template.versionHistory} />
       </div>
@@ -1357,7 +1264,7 @@ export function TemplateEditorPage() {
                                 reorderControls={null}
                                 onPatch={patchExercise}
                                 onAssignSuperset={(groupName) =>
-                                  void assignSuperset(ex.id, groupName)
+                                  assignSuperset(ex.id, groupName)
                                 }
                                 onSupersetOrder={(order) => changeSupersetOrder(ex.id, order)}
                                 onSaveDefault={() => void saveMovementDefault(ex)}
@@ -1505,7 +1412,7 @@ export function TemplateEditorPage() {
                   </>
                 }
                 onPatch={patchExercise}
-                onAssignSuperset={(groupName) => void assignSuperset(ex.id, groupName)}
+                onAssignSuperset={(groupName) => assignSuperset(ex.id, groupName)}
                 onSupersetOrder={(order) => changeSupersetOrder(ex.id, order)}
                 onSaveDefault={() => void saveMovementDefault(ex)}
                 saveDefaultStatus={defaultSaveStatus[ex.id] ?? 'idle'}
@@ -1574,7 +1481,7 @@ function ExerciseCard({
   reorderControls: ReactNode
   historyContext?: ReactNode
   onPatch: (id: string, patch: Partial<TemplateExercise>, persist?: boolean) => void
-  onAssignSuperset: (group: string | null) => void
+  onAssignSuperset: (group: string | null) => void | Promise<void>
   onSupersetOrder: (order: number) => void
   onSaveDefault: () => void
   saveDefaultStatus?: SaveDefaultStatus

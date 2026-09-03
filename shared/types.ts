@@ -5,6 +5,8 @@ export type Equipment =
   | 'machine'
   | 'cable'
   | 'kettlebell'
+  | 'band'
+  | 'box'
   | 'bodyweight'
   | 'other'
 export type SetMethod =
@@ -324,4 +326,27 @@ export type LoggedMovement = {
   id: string
   name: string
   aliases: string[]
+}
+
+export type LibraryShareResourceType = 'workout' | 'program'
+
+export type LibraryShare = {
+  id: string
+  resourceType: LibraryShareResourceType
+  resourceId: string
+  resourceName: string
+  ownerName: string
+  createdAt: string
+}
+
+export type LibrarySharePreview = {
+  share: LibraryShare
+  workout?: WorkoutTemplate
+  program?: Program
+}
+
+export type LibraryShareAcceptResult = {
+  workoutId?: string
+  programId?: string
+  workoutIds?: string[]
 }

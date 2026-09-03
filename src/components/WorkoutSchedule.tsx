@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { AdHocLog, AdHocType, Session } from '../../shared/types.ts'
 import { api } from '../lib/api.ts'
@@ -241,6 +241,88 @@ function DayAddButton({ date, onClick }: { date: string; onClick: () => void }) 
   )
 }
 
+function ScheduleDayColumn({
+  date,
+  todayKey,
+  sessions,
+  activities,
+  showAssignee,
+  assign,
+  onAdd,
+  onEditActivity,
+}: {
+  date: Date
+  todayKey: string
+  sessions: Session[]
+  activities: AdHocLog[]
+  showAssignee: boolean
+  assign?: ScheduleAssignOptions
+  onAdd: (date: string) => void
+  onEditActivity: (activity: AdHocLog) => void
+}) {
+  const dateKey = localDateKey(date)
+  return (
+    <div
+      className={`flex min-h-36 min-w-0 flex-col rounded-xl border p-2 sm:min-h-48 ${dayCellBorder(dateKey, todayKey)}`}
+    >
+      <div className="mb-2 text-center">
+        <div className="text-xs font-medium text-muted">
+          {date.toLocaleDateString(undefined, { weekday: 'short' })}
+        </div>
+        <div className="text-sm font-semibold">
+          {date.toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+          })}
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 space-y-2">
+        {sessions.map((session) => (
+          <Link
+            key={session.id}
+            to={`/sessions/${session.id}`}
+            title={
+              showAssignee
+                ? `${session.name} · ${assigneeLabel(session) ?? 'Unknown'}`
+                : session.name
+            }
+            className="block rounded-lg bg-lime/15 p-2 text-xs text-lime"
+          >
+            <span className="flex items-start gap-1.5">
+              {showAssignee ? null : (
+                <SessionCompleteMark completed={session.status === 'completed'} />
+              )}
+              <span className="min-w-0 break-words font-medium">{session.name}</span>
+            </span>
+            {showAssignee && assigneeLabel(session) ? (
+              <span className="mt-1 flex items-center gap-1.5 break-words text-[10px] opacity-80">
+                <SessionCompleteMark completed={session.status === 'completed'} />
+                <span className="min-w-0">{assigneeLabel(session)}</span>
+              </span>
+            ) : null}
+          </Link>
+        ))}
+        {activities.map((activity) => (
+          <button
+            key={activity.id}
+            type="button"
+            className="block w-full rounded-lg border border-lime/40 p-2 text-left text-xs text-lime hover:bg-lime/10"
+            onClick={() => onEditActivity(activity)}
+          >
+            <span className="block break-words font-medium">{activityLabel(activity)}</span>
+            {activity.notes ? (
+              <span className="mt-1 block break-words text-[10px] opacity-80">
+                {activity.notes}
+              </span>
+            ) : null}
+          </button>
+        ))}
+      </div>
+      {assign ? <DayAddButton date={dateKey} onClick={() => onAdd(dateKey)} /> : null}
+    </div>
+  )
+}
+
 export function WorkoutSchedule({
   sessions,
   activities = [],
@@ -258,6 +340,9 @@ export function WorkoutSchedule({
   showAssignee?: boolean
   assign?: ScheduleAssignOptions
 }) {
+  const [compactDay, setCompactDay] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches,
+  )
   const [view, setView] = useState<'week' | 'month' | 'list'>(() =>
     typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches
       ? 'list'
@@ -266,7 +351,24 @@ export function WorkoutSchedule({
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [editingActivity, setEditingActivity] = useState<AdHocLog | null>(null)
   const [addingFor, setAddingFor] = useState<string | null>(null)
-  const todayKey = localDateKey(new Date())
+  const today = new Date()
+  const todayKey = localDateKey(today)
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 1023px)')
+    const sync = () => setCompactDay(media.matches)
+    sync()
+    media.addEventListener('change', sync)
+    return () => media.removeEventListener('change', sync)
+  }, [])
+
+  useEffect(() => {
+    if (!compactDay) return
+    const now = new Date()
+    if (cursor.year !== now.getFullYear() || cursor.month !== now.getMonth()) {
+      onCursorChange({ year: now.getFullYear(), month: now.getMonth() })
+    }
+  }, [compactDay, cursor.year, cursor.month, onCursorChange])
   const sortedSessions = useMemo(
     () =>
       [...sessions].sort(
@@ -367,121 +469,87 @@ export function WorkoutSchedule({
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-display text-2xl font-bold">Workout schedule</h2>
-        <div className="flex rounded-xl border border-line p-1 text-sm">
-          {([
-            { value: 'week', label: '7 days' },
-            { value: 'month', label: 'Month' },
-            { value: 'list', label: 'List' },
-          ] as const).map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              className={`min-h-11 rounded-lg px-3 py-1 ${
-                view === option.value ? 'bg-lime text-accent-contrast' : 'text-muted'
-              }`}
-              onClick={() => chooseView(option.value)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
+        {compactDay ? null : (
+          <div className="flex rounded-xl border border-line p-1 text-sm">
+            {([
+              { value: 'week', label: '7 days' },
+              { value: 'month', label: 'Month' },
+              { value: 'list', label: 'List' },
+            ] as const).map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`min-h-11 rounded-lg px-3 py-1 ${
+                  view === option.value ? 'bg-lime text-accent-contrast' : 'text-muted'
+                }`}
+                onClick={() => chooseView(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <Card>
-        <div className="mb-4 flex items-center justify-between">
-          <button
-            type="button"
-            className="min-h-11 text-sm text-muted"
-            onClick={() => movePeriod(-1)}
-          >
-            Previous
-          </button>
-          <h3 className="text-center font-semibold">
-            {view === 'week' ? weekTitle : monthTitle}
-          </h3>
-          <button
-            type="button"
-            className="min-h-11 text-sm text-muted"
-            onClick={() => movePeriod(1)}
-          >
-            Next
-          </button>
-        </div>
-
-        {view === 'week' ? (
-          <div className="grid grid-cols-7 gap-2">
-            {weekDates.map((date) => {
-              const dateKey = localDateKey(date)
-              const daySessions = byDay.get(dateKey) ?? []
-              const dayActivities = activities.filter(
-                (activity) => activity.loggedOn === dateKey,
-              )
-              return (
-                <div
-                  key={dateKey}
-                  className={`flex min-h-36 min-w-0 flex-col rounded-xl border p-2 sm:min-h-48 ${dayCellBorder(dateKey, todayKey)}`}
-                >
-                  <div className="mb-2 text-center">
-                    <div className="text-xs font-medium text-muted">
-                      {date.toLocaleDateString(undefined, { weekday: 'short' })}
-                    </div>
-                    <div className="text-sm font-semibold">
-                      {date.toLocaleDateString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                      })}
-                    </div>
-                  </div>
-                  <div className="min-h-0 flex-1 space-y-2">
-                    {daySessions.map((session) => (
-                      <Link
-                        key={session.id}
-                        to={`/sessions/${session.id}`}
-                        title={
-                          showAssignee
-                            ? `${session.name} · ${assigneeLabel(session) ?? 'Unknown'}`
-                            : session.name
-                        }
-                        className="block rounded-lg bg-lime/15 p-2 text-xs text-lime"
-                      >
-                        <span className="flex items-start gap-1.5">
-                          {showAssignee ? null : (
-                            <SessionCompleteMark completed={session.status === 'completed'} />
-                          )}
-                          <span className="min-w-0 break-words font-medium">{session.name}</span>
-                        </span>
-                        {showAssignee && assigneeLabel(session) ? (
-                          <span className="mt-1 flex items-center gap-1.5 break-words text-[10px] opacity-80">
-                            <SessionCompleteMark completed={session.status === 'completed'} />
-                            <span className="min-w-0">{assigneeLabel(session)}</span>
-                          </span>
-                        ) : null}
-                      </Link>
-                    ))}
-                    {dayActivities.map((activity) => (
-                      <button
-                        key={activity.id}
-                        type="button"
-                        className="block w-full rounded-lg border border-lime/40 p-2 text-left text-xs text-lime hover:bg-lime/10"
-                        onClick={() => setEditingActivity(activity)}
-                      >
-                        <span className="block break-words font-medium">
-                          {activityLabel(activity)}
-                        </span>
-                        {activity.notes ? (
-                          <span className="mt-1 block break-words text-[10px] opacity-80">
-                            {activity.notes}
-                          </span>
-                        ) : null}
-                      </button>
-                    ))}
-                  </div>
-                  {assign ? (
-                    <DayAddButton date={dateKey} onClick={() => openAdd(dateKey)} />
-                  ) : null}
-                </div>
-              )
+        {compactDay ? (
+          <h3 className="mb-4 text-center font-semibold">
+            {today.toLocaleDateString(undefined, {
+              weekday: 'long',
+              month: 'long',
+              day: 'numeric',
             })}
+          </h3>
+        ) : (
+          <div className="mb-4 flex items-center justify-between">
+            <button
+              type="button"
+              className="min-h-11 text-sm text-muted"
+              onClick={() => movePeriod(-1)}
+            >
+              Previous
+            </button>
+            <h3 className="text-center font-semibold">
+              {view === 'week' ? weekTitle : monthTitle}
+            </h3>
+            <button
+              type="button"
+              className="min-h-11 text-sm text-muted"
+              onClick={() => movePeriod(1)}
+            >
+              Next
+            </button>
+          </div>
+        )}
+
+        {compactDay ? (
+          <ScheduleDayColumn
+            date={today}
+            todayKey={todayKey}
+            sessions={byDay.get(todayKey) ?? []}
+            activities={activities.filter((activity) => activity.loggedOn === todayKey)}
+            showAssignee={showAssignee}
+            assign={assign}
+            onAdd={openAdd}
+            onEditActivity={setEditingActivity}
+          />
+        ) : view === 'week' ? (
+          <div className="grid grid-cols-7 gap-2">
+            {weekDates.map((date) => (
+              <ScheduleDayColumn
+                key={localDateKey(date)}
+                date={date}
+                todayKey={todayKey}
+                sessions={byDay.get(localDateKey(date)) ?? []}
+                activities={activities.filter(
+                  (activity) => activity.loggedOn === localDateKey(date),
+                )}
+                showAssignee={showAssignee}
+                assign={assign}
+                onAdd={openAdd}
+                onEditActivity={setEditingActivity}
+              />
+            ))}
           </div>
         ) : view === 'month' ? (
           <div className="grid grid-cols-7 gap-1 text-center text-xs text-muted">

@@ -6,6 +6,7 @@ import type {
   PrescribedExercise,
   SetMethod,
   SetPrescription,
+  TemplateExercise,
   Tempo,
 } from '../../shared/types.ts'
 
@@ -34,9 +35,44 @@ export const EQUIPMENT: { value: Equipment; label: string }[] = [
   { value: 'machine', label: 'Machine' },
   { value: 'cable', label: 'Cable' },
   { value: 'kettlebell', label: 'Kettlebell' },
+  { value: 'band', label: 'Band' },
+  { value: 'box', label: 'Box' },
   { value: 'bodyweight', label: 'Bodyweight' },
   { value: 'other', label: 'Other' },
 ]
+
+/** Flattens a saved workout row into the shape the read-only client view renders. */
+export function toPrescribedExercise(ex: TemplateExercise): PrescribedExercise {
+  return {
+    movementId: ex.movementId,
+    movementName: ex.movementName ?? '',
+    variantId: ex.variantId,
+    equipment: ex.equipment,
+    setCount: ex.setCount,
+    repsMin: ex.repsMin,
+    repsMax: ex.repsMax,
+    perSetEnabled: ex.perSetEnabled,
+    setPrescriptions: ex.setPrescriptions,
+    method: ex.method,
+    methodTarget: ex.methodTarget,
+    category: ex.category,
+    loadPrescription: ex.loadPrescription,
+    tempo: {
+      eccentric: ex.tempoEccentric,
+      pauseBottom: ex.tempoPauseBottom,
+      concentric: ex.tempoConcentric,
+      pauseTop: ex.tempoPauseTop,
+    },
+    tempoMode: ex.tempoMode,
+    tempoPerRep: ex.tempoPerRep,
+    restAfterSetSeconds: ex.restAfterSetSeconds,
+    restAfterExerciseSeconds: ex.restAfterExerciseSeconds,
+    supersetGroup: ex.supersetGroup,
+    supersetOrder: ex.supersetOrder,
+    notes: ex.notes,
+    youtubeUrl: ex.youtubeUrl,
+  }
+}
 
 export function movementDefaults(movement: Movement) {
   const equipment = movement.defaultEquipment ?? movement.variants[0]?.equipment ?? null

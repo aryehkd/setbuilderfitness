@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Button, Card, ConfirmLink, Field, TextInput } from '../components/ui.tsx'
 import { SearchSelect } from '../components/SearchSelect.tsx'
+import { ShareWithTrainer } from '../components/ShareWithTrainer.tsx'
 import { api } from '../lib/api.ts'
 import type { Program, WorkoutTemplate } from '../../shared/types.ts'
 
@@ -202,6 +203,9 @@ export function ProgramEditorPage() {
             />
           </Field>
           <span className="pb-3.5 text-xs text-muted">{saving ? 'Saving…' : 'Saved'}</span>
+          <div className="pb-1">
+            <ShareWithTrainer path={`/api/programs/${program.id}/share`} />
+          </div>
         </div>
       </div>
       <p className="text-sm text-muted">

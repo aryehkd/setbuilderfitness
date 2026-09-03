@@ -46,6 +46,14 @@ import {
   handleUpsertExercise,
   loadContext,
 } from '../lib/handlers.ts'
+import {
+  handleAcceptLibraryShare,
+  handleDismissLibraryShare,
+  handleGetLibraryShare,
+  handleListLibraryShares,
+  handleShareProgram,
+  handleShareTemplate,
+} from '../lib/libraryShares.ts'
 
 export default async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204 })
@@ -134,6 +142,24 @@ export default async (req: Request) => {
     if (templateCopy && req.method === 'POST') {
       return await handleCopyTemplate(ctx, templateCopy[1]!)
     }
+    const templateShare = path.match(/^\/api\/templates\/([^/]+)\/share$/)
+    if (templateShare && req.method === 'POST') {
+      return await handleShareTemplate(ctx, templateShare[1]!, req)
+    }
+
+    if (path === '/api/library-shares' && req.method === 'GET') {
+      return await handleListLibraryShares(ctx, req)
+    }
+    const libraryShareAccept = path.match(/^\/api\/library-shares\/([^/]+)\/accept$/)
+    if (libraryShareAccept && req.method === 'POST') {
+      return await handleAcceptLibraryShare(ctx, libraryShareAccept[1]!)
+    }
+    const libraryShareMatch = path.match(/^\/api\/library-shares\/([^/]+)$/)
+    if (libraryShareMatch) {
+      const shareId = libraryShareMatch[1]!
+      if (req.method === 'GET') return await handleGetLibraryShare(ctx, shareId)
+      if (req.method === 'DELETE') return await handleDismissLibraryShare(ctx, shareId)
+    }
 
     const templateMatch = path.match(/^\/api\/templates\/([^/]+)$/)
     if (templateMatch) {
@@ -148,6 +174,10 @@ export default async (req: Request) => {
     }
     if (path === '/api/programs' && req.method === 'POST') {
       return await handleCreateProgram(ctx, req)
+    }
+    const programShare = path.match(/^\/api\/programs\/([^/]+)\/share$/)
+    if (programShare && req.method === 'POST') {
+      return await handleShareProgram(ctx, programShare[1]!, req)
     }
     const programAssign = path.match(/^\/api\/programs\/([^/]+)\/assign$/)
     if (programAssign && req.method === 'POST') {

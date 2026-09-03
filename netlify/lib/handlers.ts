@@ -93,6 +93,7 @@ export async function loadContext(
   await ensureTrainerSelfClients(db)
   await ensureMovementCatalog(db)
   await ensureProgramTables(db)
+  await ensureLibrarySharesTable(db)
 
   const existing = await db.sql<AppUser>`
     SELECT id, email, name, role, bio, phone, location, website, timezone, accent_color, onboarding_completed_at
@@ -136,6 +137,7 @@ let userProfileColumnsReady = false
 let trainerSelfClientsReady = false
 let movementCatalogReady = false
 let programTablesReady = false
+let librarySharesReady = false
 
 async function ensureUserProfileColumns(db: Db) {
   if (userProfileColumnsReady) return
@@ -209,6 +211,36 @@ async function ensureProgramTables(db: Db) {
       AND ps.name = wt.name
   `
   programTablesReady = true
+}
+
+async function ensureLibrarySharesTable(db: Db) {
+  if (librarySharesReady) return
+  await db.sql`
+    CREATE TABLE IF NOT EXISTS library_shares (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      owner_trainer_id UUID NOT NULL REFERENCES trainers(id) ON DELETE CASCADE,
+      recipient_trainer_id UUID NOT NULL REFERENCES trainers(id) ON DELETE CASCADE,
+      resource_type TEXT NOT NULL CHECK (resource_type IN ('workout', 'program')),
+      resource_id UUID NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      accepted_at TIMESTAMPTZ
+    )
+  `
+  await db.sql`
+    CREATE INDEX IF NOT EXISTS library_shares_recipient_status_idx
+    ON library_shares (recipient_trainer_id, status)
+  `
+  await db.sql`
+    CREATE INDEX IF NOT EXISTS library_shares_owner_idx
+    ON library_shares (owner_trainer_id)
+  `
+  await db.sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS library_shares_pending_unique
+    ON library_shares (recipient_trainer_id, resource_type, resource_id)
+    WHERE status = 'pending'
+  `
+  librarySharesReady = true
 }
 
 async function ensureMovementCatalog(db: Db) {
@@ -675,6 +707,8 @@ function appEquipment(values: string[]): Equipment {
   if (value === 'machine') return 'machine'
   if (value === 'cable') return 'cable'
   if (value === 'kettlebell') return 'kettlebell'
+  if (value === 'band' || value === 'bands' || value === 'resistance band') return 'band'
+  if (value === 'box' || value === 'plyo box') return 'box'
   return 'other'
 }
 
@@ -820,6 +854,8 @@ const EQUIPMENT_VALUES: Equipment[] = [
   'machine',
   'cable',
   'kettlebell',
+  'band',
+  'box',
   'bodyweight',
   'other',
 ]
