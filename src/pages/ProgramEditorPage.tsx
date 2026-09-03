@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Button, Card, ConfirmLink, Field, Select, TextInput } from '../components/ui.tsx'
+import { Button, Card, ConfirmLink, Field, TextInput } from '../components/ui.tsx'
+import { SearchSelect } from '../components/SearchSelect.tsx'
 import { api } from '../lib/api.ts'
 import type { Program, WorkoutTemplate } from '../../shared/types.ts'
 
@@ -213,44 +214,38 @@ export function ProgramEditorPage() {
           <h2 className="font-semibold">
             Add workout · Week {addingFor.weekIndex + 1} · {WEEKDAYS[addingFor.weekday]}
           </h2>
-          <Field label="Saved workouts">
-            <Select
-              value={templateId}
-              onChange={(e) => {
-                setTemplateId(e.target.value)
-                if (e.target.value) setProgramSessionId('')
-              }}
-            >
-              <option value="">
-                {templates.length === 0 ? 'No saved workouts yet' : 'Choose a saved workout…'}
-              </option>
-              {templates.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Program workouts">
-            <Select
-              value={programSessionId}
-              onChange={(e) => {
-                setProgramSessionId(e.target.value)
-                if (e.target.value) setTemplateId('')
-              }}
-            >
-              <option value="">
-                {(program.sessions ?? []).length === 0
-                  ? 'No program workouts yet'
-                  : 'Choose a program workout…'}
-              </option>
-              {(program.sessions ?? []).map((session) => (
-                <option key={session.id} value={session.id}>
-                  {session.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
+          <SearchSelect
+            label="Saved workouts"
+            placeholder={
+              templates.length === 0 ? 'No saved workouts yet' : 'Search saved workouts…'
+            }
+            options={templates.map((template) => ({
+              id: template.id,
+              label: template.name,
+            }))}
+            valueId={templateId}
+            onChange={(id) => {
+              setTemplateId(id)
+              if (id) setProgramSessionId('')
+            }}
+          />
+          <SearchSelect
+            label="Program workouts"
+            placeholder={
+              (program.sessions ?? []).length === 0
+                ? 'No program workouts yet'
+                : 'Search program workouts…'
+            }
+            options={(program.sessions ?? []).map((session) => ({
+              id: session.id,
+              label: session.name,
+            }))}
+            valueId={programSessionId}
+            onChange={(id) => {
+              setProgramSessionId(id)
+              if (id) setTemplateId('')
+            }}
+          />
           <p className="text-xs text-muted">
             Program workouts are independent copies and are never added to your saved workouts.
           </p>

@@ -13,7 +13,7 @@ import {
   SessionPrescriptionTable,
 } from '../components/SessionPrescriptionEditor.tsx'
 import { VersionHistory } from '../components/VersionHistory.tsx'
-import { ModeToggle } from '../components/WorkoutEditorControls.tsx'
+import { CheckIcon, ModeToggle, SpinnerIcon } from '../components/WorkoutEditorControls.tsx'
 import { useMovementHistoryContext } from '../hooks/useMovementHistoryContext.ts'
 import { api } from '../lib/api.ts'
 import { useAuth } from '../lib/auth.tsx'
@@ -42,6 +42,7 @@ export function SessionDetailPage() {
   const [draft, setDraft] = useState<{ name: string; prescription: Prescription } | null>(null)
   const [movements, setMovements] = useState<Movement[]>([])
   const [savingAssignment, setSavingAssignment] = useState(false)
+  const [completeStatus, setCompleteStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
   const [deleting, setDeleting] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
   const isOwnWorkout = !isClient && Boolean(session?.isTrainerWorkout)
@@ -65,6 +66,7 @@ export function SessionDetailPage() {
     setDuration(
       data.loggedDurationSeconds ? String(Math.round(data.loggedDurationSeconds / 60)) : '',
     )
+    setCompleteStatus(data.status === 'completed' ? 'saved' : 'idle')
     if (me?.user.role !== 'client') {
       setTrainerMode(data.isTrainerWorkout || data.logs.length > 0 ? 'log' : 'cards')
     }
@@ -94,18 +96,25 @@ export function SessionDetailPage() {
 
   const save = async (status?: Session['status']) => {
     if (!id || !session) return
-    const updated = await api<Session>(`/api/sessions/${id}/logs`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        logs: session.logs,
-        durationSeconds: duration ? Number(duration) * 60 : null,
-        status,
-      }),
-    })
-    setSession({
-      ...updated,
-      clientName: session.clientName ?? updated.clientName,
-    })
+    const markingComplete = status === 'completed'
+    if (markingComplete) setCompleteStatus('saving')
+    try {
+      const updated = await api<Session>(`/api/sessions/${id}/logs`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          logs: session.logs,
+          durationSeconds: duration ? Number(duration) * 60 : null,
+          status,
+        }),
+      })
+      setSession({
+        ...updated,
+        clientName: session.clientName ?? updated.clientName,
+      })
+      if (markingComplete) setCompleteStatus('saved')
+    } catch {
+      if (markingComplete) setCompleteStatus('idle')
+    }
   }
 
   const openHistory = async (movementId: string) => {
@@ -417,7 +426,14 @@ export function SessionDetailPage() {
             <Button className="w-full sm:w-auto" variant="ghost" onClick={() => void save()}>
               Save log
             </Button>
-            <Button className="w-full sm:w-auto" onClick={() => void save('completed')}>
+            <Button
+              className="w-full gap-2 sm:w-auto"
+              disabled={completeStatus === 'saving'}
+              aria-busy={completeStatus === 'saving'}
+              onClick={() => void save('completed')}
+            >
+              {completeStatus === 'saving' ? <SpinnerIcon /> : null}
+              {completeStatus === 'saved' ? <CheckIcon /> : null}
               Mark completed
             </Button>
           </div>

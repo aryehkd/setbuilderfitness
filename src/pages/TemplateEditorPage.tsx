@@ -469,6 +469,35 @@ function BlockDragHelp() {
   )
 }
 
+/** Local edit counters, used to detect typing that raced with a save request. */
+type EditVersions = { meta: number; exercises: Map<string, number> }
+
+/**
+ * Merge a save response into local state. The server is authoritative for which
+ * exercises exist and for anything untouched, but a field the trainer edited
+ * while the request was in flight keeps its local value, so a response can
+ * never wipe what is being typed.
+ */
+function reconcileTemplate(
+  current: WorkoutTemplate | null,
+  incoming: WorkoutTemplate,
+  before: EditVersions,
+  now: EditVersions,
+): WorkoutTemplate {
+  if (!current) return incoming
+  const local = new Map((current.exercises ?? []).map((item) => [item.id, item]))
+  const metaEdited = now.meta !== before.meta
+  return {
+    ...incoming,
+    name: metaEdited ? current.name : incoming.name,
+    warmup: metaEdited ? current.warmup : incoming.warmup,
+    exercises: (incoming.exercises ?? []).map((item) => {
+      const edited = (now.exercises.get(item.id) ?? 0) !== (before.exercises.get(item.id) ?? 0)
+      return edited ? (local.get(item.id) ?? item) : item
+    }),
+  }
+}
+
 export function TemplateEditorPage() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -490,8 +519,25 @@ export function TemplateEditorPage() {
     {},
   )
 
+  // Counters bumped on every local edit, so a save response can tell whether the
+  // trainer typed something newer than what the server echoed back.
+  const edits = useRef<EditVersions>({ meta: 0, exercises: new Map() })
+
+  const snapshotEdits = (): EditVersions => ({
+    meta: edits.current.meta,
+    exercises: new Map(edits.current.exercises),
+  })
+
   const noteWorkoutEdited = () => {
     setDefaultSaveStatus(clearCompletedDefaultSaves)
+  }
+
+  const noteMetaEdited = () => {
+    edits.current.meta += 1
+  }
+
+  const noteExerciseEdited = (exerciseId: string) => {
+    edits.current.exercises.set(exerciseId, (edits.current.exercises.get(exerciseId) ?? 0) + 1)
   }
 
   const load = async () => {
@@ -560,6 +606,7 @@ export function TemplateEditorPage() {
   const saveMeta = async (patch: Partial<WorkoutTemplate>) => {
     if (!id || !template) return
     setSaving(true)
+    const before = snapshotEdits()
     const updated = await api<WorkoutTemplate>(`/api/templates/${id}`, {
       method: 'PUT',
       body: JSON.stringify({
@@ -568,7 +615,7 @@ export function TemplateEditorPage() {
         warmup: patch.warmup ?? template.warmup,
       }),
     })
-    setTemplate(updated)
+    setTemplate((current) => reconcileTemplate(current, updated, before, edits.current))
     setSaving(false)
   }
 
@@ -693,11 +740,12 @@ export function TemplateEditorPage() {
 
   const saveExercise = async (ex: TemplateExercise) => {
     if (!id) return
-    await api(`/api/templates/${id}/exercises/${ex.id}`, {
+    const before = snapshotEdits()
+    const updated = await api<WorkoutTemplate>(`/api/templates/${id}/exercises/${ex.id}`, {
       method: 'PUT',
       body: JSON.stringify(ex),
     })
-    await load()
+    setTemplate((current) => reconcileTemplate(current, updated, before, edits.current))
   }
 
   const saveMovementDefault = async (ex: TemplateExercise) => {
@@ -736,6 +784,7 @@ export function TemplateEditorPage() {
   const patchExercise = (exerciseId: string, patch: Partial<TemplateExercise>, persist = false) => {
     if (!template) return
     noteWorkoutEdited()
+    noteExerciseEdited(exerciseId)
     const nextExercises = (template.exercises ?? []).map((item) =>
       item.id === exerciseId ? { ...item, ...patch } : item,
     )
@@ -916,6 +965,7 @@ export function TemplateEditorPage() {
           value={template.name}
           onChange={(e) => {
             noteWorkoutEdited()
+            noteMetaEdited()
             setTemplate({ ...template, name: e.target.value })
           }}
           onBlur={() => void saveMeta({ name: template.name })}
@@ -1073,6 +1123,7 @@ export function TemplateEditorPage() {
               value={warmup}
               onChange={(e) => {
                 noteWorkoutEdited()
+                noteMetaEdited()
                 setTemplate({ ...template, warmup: e.target.value })
               }}
               onBlur={() => void saveMeta({ warmup })}
@@ -1361,6 +1412,7 @@ export function TemplateEditorPage() {
           value={warmup}
           onChange={(e) => {
             noteWorkoutEdited()
+            noteMetaEdited()
             setTemplate({ ...template, warmup: e.target.value })
           }}
           onBlur={() => void saveMeta({ warmup })}

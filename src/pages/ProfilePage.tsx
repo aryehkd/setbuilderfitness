@@ -6,7 +6,7 @@ import { Button, Card } from '../components/ui.tsx'
 import { ProfileFields, type ProfileDraft } from '../components/ProfileFields.tsx'
 import { api } from '../lib/api.ts'
 import { useAuth } from '../lib/auth.tsx'
-import type { ActivityDay, MeResponse, Session } from '../../shared/types.ts'
+import type { ActivityDay, ActivityResponse, MeResponse, Session } from '../../shared/types.ts'
 
 function draftFromMe(me: MeResponse): ProfileDraft {
   return {
@@ -23,9 +23,10 @@ function draftFromMe(me: MeResponse): ProfileDraft {
 
 export function ProfilePage() {
   const { me, refreshMe, logout } = useAuth()
-  const year = new Date().getFullYear()
+  const [year, setYear] = useState(new Date().getFullYear())
   const isClient = me?.user.role === 'client'
   const [days, setDays] = useState<ActivityDay[]>([])
+  const [activityYears, setActivityYears] = useState<number[]>([])
   const [past, setPast] = useState<Session[]>([])
   const [draft, setDraft] = useState<ProfileDraft | null>(null)
   const [saving, setSaving] = useState(false)
@@ -39,7 +40,10 @@ export function ProfilePage() {
 
   useEffect(() => {
     if (!me) return
-    void api<ActivityDay[]>(`/api/activity?year=${year}`).then(setDays)
+    void api<ActivityResponse>(`/api/activity?year=${year}`).then((data) => {
+      setDays(data.days)
+      setActivityYears(data.years)
+    })
     if (isClient) {
       void api<Session[] | { sessions: Session[] }>('/api/past-workouts').then((data) => {
         setPast(Array.isArray(data) ? data : data.sessions)
@@ -114,7 +118,7 @@ export function ProfilePage() {
       ) : null}
       <Card>
         <h2 className="mb-4 font-semibold">{year} Activity</h2>
-        <Heatmap year={year} days={days} />
+        <Heatmap year={year} days={days} years={activityYears} onYearChange={setYear} />
       </Card>
       {isClient ? (
         <>

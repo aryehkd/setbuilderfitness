@@ -7,6 +7,7 @@ import { Button, Card, ConfirmLink, DateInput, Field } from '../components/ui.ts
 import { api } from '../lib/api.ts'
 import type {
   ActivityDay,
+  ActivityResponse,
   Program,
   Session,
   TrainerClient,
@@ -20,24 +21,23 @@ export function ClientDetailPage() {
   const [programs, setPrograms] = useState<Program[]>([])
   const [sessions, setSessions] = useState<Session[]>([])
   const [activity, setActivity] = useState<ActivityDay[]>([])
+  const [activityYears, setActivityYears] = useState<number[]>([])
   const [templateId, setTemplateId] = useState('')
   const [programId, setProgramId] = useState('')
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
-  const year = new Date().getFullYear()
+  const [year, setYear] = useState(new Date().getFullYear())
 
   const load = async () => {
-    const [clients, tpls, programRows, sess, activityDays] = await Promise.all([
+    const [clients, tpls, programRows, sess] = await Promise.all([
       api<TrainerClient[]>('/api/clients'),
       api<WorkoutTemplate[]>('/api/templates'),
       api<Program[]>('/api/programs'),
       api<Session[]>(`/api/sessions?clientId=${id}`),
-      api<ActivityDay[]>(`/api/activity?year=${year}&clientId=${id}`),
     ])
     setClient(clients.find((c) => c.id === id) ?? null)
     setTemplates(tpls)
     setPrograms(programRows)
     setSessions(sess)
-    setActivity(activityDays)
     if (!templateId && tpls[0]) setTemplateId(tpls[0].id)
     if (!programId && programRows[0]) setProgramId(programRows[0].id)
   }
@@ -46,6 +46,13 @@ export function ClientDetailPage() {
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
+
+  useEffect(() => {
+    void api<ActivityResponse>(`/api/activity?year=${year}&clientId=${id}`).then((data) => {
+      setActivity(data.days)
+      setActivityYears(data.years)
+    })
+  }, [id, year])
 
   const assignProgram = async () => {
     if (!id || !programId) return
@@ -62,7 +69,7 @@ export function ClientDetailPage() {
       <p className="break-all text-muted">{client?.email}</p>
       <Card>
         <h2 className="mb-4 font-semibold">{year} Completed sessions</h2>
-        <Heatmap year={year} days={activity} />
+        <Heatmap year={year} days={activity} years={activityYears} onYearChange={setYear} />
       </Card>
       {id ? (
         <AssignWorkoutToDate

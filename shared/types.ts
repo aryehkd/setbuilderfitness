@@ -292,6 +292,13 @@ export type TrainerClient = {
 export type ActivityDay = {
   date: string
   minutes: number
+  titles: string[]
+}
+
+export type ActivityResponse = {
+  days: ActivityDay[]
+  /** Years that have any logged activity, so the heatmap only offers those. */
+  years: number[]
 }
 
 export type AdHocLog = {

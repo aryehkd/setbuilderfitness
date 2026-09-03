@@ -492,7 +492,7 @@ export async function handleUpdateProfile(ctx: AppContext, req: Request) {
   if (!email || !email.includes('@')) return error('A valid email is required')
   const accentColor = optionalText(body.accentColor)
   if (ctx.trainer && (!accentColor || !/^#[0-9a-f]{6}$/i.test(accentColor))) {
-    return error('Choose a valid accent color')
+    return error('Choose a valid Theme color')
   }
 
   await ctx.db.sql`
@@ -547,7 +547,7 @@ export async function handleOnboarding(ctx: AppContext, req: Request) {
     if (!timezone) return error('Timezone is required')
     if (!bio) return error('Bio is required')
     if (!accentColor || !/^#[0-9a-f]{6}$/i.test(accentColor)) {
-      return error('Choose a valid accent color')
+      return error('Choose a valid Theme color')
     }
     let code = generateTrainerCode()
     for (let i = 0; i < 8; i++) {
@@ -1946,8 +1946,14 @@ export async function handleUpsertExercise(
         [historyExerciseFromTemplate(after, after.sortOrder)],
       ),
     )
-    await ctx.db.sql`UPDATE workout_templates SET updated_at = NOW() WHERE id = ${templateId}`
-    return json(after)
+    const [templateRow] = await ctx.db.sql<TemplateRow>`
+      UPDATE workout_templates SET updated_at = NOW()
+      WHERE id = ${templateId}
+      RETURNING *
+    `
+    // Return the whole template so the editor can reconcile in one round trip
+    // instead of following the save with a refetch.
+    return json(mapTemplate(templateRow!, await loadExercises(ctx.db, templateId)))
   }
 
   const max = await ctx.db.sql<{ max: number | null }>`
@@ -2719,37 +2725,70 @@ export async function handleActivity(ctx: AppContext, req: Request) {
   const end = `${year}-12-31`
 
   const sessionRows = subjectClient
-    ? await ctx.db.sql<{ day: unknown; seconds: string }>`
-        SELECT scheduled_date AS day, SUM(COALESCE(logged_duration_seconds, 0))::text AS seconds
+    ? await ctx.db.sql<{ day: unknown; seconds: string; title: string }>`
+        SELECT scheduled_date AS day,
+               COALESCE(logged_duration_seconds, 0)::text AS seconds,
+               name AS title
         FROM sessions
         WHERE client_id = ${subjectClient.id}
           AND status = 'completed'
           AND scheduled_date >= ${start}::date
           AND scheduled_date <= ${end}::date
-        GROUP BY scheduled_date
       `
     : []
 
-  const adHocRows = await ctx.db.sql<{ day: unknown; seconds: string }>`
-    SELECT logged_on AS day, SUM(duration_seconds)::text AS seconds
+  const adHocRows = await ctx.db.sql<{
+    day: unknown
+    seconds: string
+    activity_type: AdHocType
+    notes: string | null
+  }>`
+    SELECT logged_on AS day, duration_seconds::text AS seconds, activity_type, notes
     FROM ad_hoc_logs
     WHERE user_id = ${subjectUserId}
       AND logged_on >= ${start}::date
       AND logged_on <= ${end}::date
-    GROUP BY logged_on
   `
 
-  const minutes = new Map<string, number>()
-  for (const row of [...sessionRows, ...adHocRows]) {
-    const day = asDate(row.day)
-    minutes.set(day, (minutes.get(day) ?? 0) + Number(row.seconds) / 60)
+  const byDay = new Map<string, { minutes: number; titles: string[] }>()
+  const add = (day: string, seconds: number, title: string) => {
+    const entry = byDay.get(day) ?? { minutes: 0, titles: [] }
+    entry.minutes += seconds / 60
+    if (title) entry.titles.push(title)
+    byDay.set(day, entry)
   }
-  return json(
-    [...minutes.entries()].map(([date, mins]) => ({
+  for (const row of sessionRows) {
+    add(asDate(row.day), Number(row.seconds), row.title)
+  }
+  for (const row of adHocRows) {
+    const label = `${row.activity_type[0]!.toUpperCase()}${row.activity_type.slice(1)}`
+    add(asDate(row.day), Number(row.seconds), row.notes ? `${label} · ${row.notes}` : label)
+  }
+
+  const years = new Set<number>()
+  const sessionYears = subjectClient
+    ? await ctx.db.sql<{ year: string }>`
+        SELECT DISTINCT EXTRACT(YEAR FROM scheduled_date)::text AS year
+        FROM sessions
+        WHERE client_id = ${subjectClient.id} AND status = 'completed'
+      `
+    : []
+  const adHocYears = await ctx.db.sql<{ year: string }>`
+    SELECT DISTINCT EXTRACT(YEAR FROM logged_on)::text AS year
+    FROM ad_hoc_logs
+    WHERE user_id = ${subjectUserId}
+  `
+  for (const row of [...sessionYears, ...adHocYears]) years.add(Number(row.year))
+  years.add(new Date().getFullYear())
+
+  return json({
+    days: [...byDay.entries()].map(([date, entry]) => ({
       date,
-      minutes: Math.round(mins),
+      minutes: Math.round(entry.minutes),
+      titles: entry.titles,
     })),
-  )
+    years: [...years].sort((a, b) => a - b),
+  })
 }
 
 export async function handleExerciseHistory(ctx: AppContext, req: Request) {

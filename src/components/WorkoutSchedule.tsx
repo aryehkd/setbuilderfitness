@@ -44,6 +44,29 @@ function assigneeLabel(session: Session) {
   return session.isTrainerWorkout ? 'Myself' : session.clientName
 }
 
+function SessionCompleteMark({ completed }: { completed: boolean }) {
+  return (
+    <span
+      className={`mt-px inline-flex h-3 w-3 shrink-0 items-center justify-center rounded-full ${
+        completed ? 'bg-lime text-accent-contrast' : 'border border-current bg-transparent'
+      }`}
+      aria-hidden="true"
+    >
+      {completed ? (
+        <svg viewBox="0 0 12 12" className="h-2 w-2" fill="none" aria-hidden="true">
+          <path
+            d="M2.5 6.2 5 8.5 9.5 3.5"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      ) : null}
+    </span>
+  )
+}
+
 function activityLabel(activity: AdHocLog) {
   return `${activity.activityType[0]!.toUpperCase()}${activity.activityType.slice(1)} · ${Math.round(activity.durationSeconds / 60)} min`
 }
@@ -421,10 +444,16 @@ export function WorkoutSchedule({
                         }
                         className="block rounded-lg bg-lime/15 p-2 text-xs text-lime"
                       >
-                        <span className="block break-words font-medium">{session.name}</span>
+                        <span className="flex items-start gap-1.5">
+                          {showAssignee ? null : (
+                            <SessionCompleteMark completed={session.status === 'completed'} />
+                          )}
+                          <span className="min-w-0 break-words font-medium">{session.name}</span>
+                        </span>
                         {showAssignee && assigneeLabel(session) ? (
-                          <span className="mt-1 block break-words text-[10px] opacity-80">
-                            {assigneeLabel(session)}
+                          <span className="mt-1 flex items-center gap-1.5 break-words text-[10px] opacity-80">
+                            <SessionCompleteMark completed={session.status === 'completed'} />
+                            <span className="min-w-0">{assigneeLabel(session)}</span>
                           </span>
                         ) : null}
                       </Link>
@@ -487,12 +516,22 @@ export function WorkoutSchedule({
                             ? `${session.name} · ${assigneeLabel(session) ?? 'Unknown'}`
                             : session.name
                         }
-                        className="mt-1 block truncate rounded bg-lime/15 px-1 py-0.5 text-[11px] text-lime"
+                        className="mt-1 block min-w-0 rounded bg-lime/15 px-1 py-0.5 text-[11px] text-lime"
                       >
-                        {session.name}
-                        {showAssignee && assigneeLabel(session)
-                          ? ` · ${assigneeLabel(session)}`
-                          : ''}
+                        {showAssignee && assigneeLabel(session) ? (
+                          <>
+                            <span className="block truncate">{session.name}</span>
+                            <span className="mt-0.5 flex items-center gap-1 opacity-80">
+                              <SessionCompleteMark completed={session.status === 'completed'} />
+                              <span className="min-w-0 truncate">{assigneeLabel(session)}</span>
+                            </span>
+                          </>
+                        ) : (
+                          <span className="flex items-center gap-1">
+                            <SessionCompleteMark completed={session.status === 'completed'} />
+                            <span className="min-w-0 truncate">{session.name}</span>
+                          </span>
+                        )}
                       </Link>
                     ))}
                     {dayActivities.map((activity) => (
@@ -527,13 +566,21 @@ export function WorkoutSchedule({
                       to={`/sessions/${item.session.id}`}
                       className="flex flex-col items-start gap-1 hover:text-lime sm:flex-row sm:items-center sm:justify-between"
                     >
-                      <span className="break-words">
-                        {item.session.scheduledDate} · {item.session.name}
+                      <span className="flex min-w-0 items-start gap-2 break-words">
+                        {showAssignee ? null : (
+                          <SessionCompleteMark completed={item.session.status === 'completed'} />
+                        )}
+                        <span>
+                          {item.session.scheduledDate} · {item.session.name}
+                        </span>
                       </span>
-                      <span className="shrink-0 text-xs text-muted">
-                        {showAssignee && assigneeLabel(item.session)
-                          ? `${assigneeLabel(item.session)} · `
-                          : ''}
+                      <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted">
+                        {showAssignee && assigneeLabel(item.session) ? (
+                          <>
+                            <SessionCompleteMark completed={item.session.status === 'completed'} />
+                            <span>{assigneeLabel(item.session)} · </span>
+                          </>
+                        ) : null}
                         <span className="uppercase">{item.session.status}</span>
                       </span>
                     </Link>

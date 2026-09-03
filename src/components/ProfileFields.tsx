@@ -1,7 +1,35 @@
+import { useEffect, useRef, useState } from 'react'
 import { Field, Select, TextArea, TextInput } from './ui.tsx'
 import { TIMEZONES } from '../lib/timezones.ts'
 
 export const DEFAULT_ACCENT_COLOR = '#c6f54e'
+
+/**
+ * Accent options, kept light so they stay readable as text and as button fills
+ * on the dark app background.
+ */
+export const ACCENT_COLORS = [
+  { value: '#c6f54e', label: 'Lime' },
+  { value: '#a3e635', label: 'Apple' },
+  { value: '#86efac', label: 'Mint' },
+  { value: '#6ee7b7', label: 'Seafoam' },
+  { value: '#5eead4', label: 'Teal' },
+  { value: '#67e8f9', label: 'Aqua' },
+  { value: '#7dd3fc', label: 'Sky' },
+  { value: '#93c5fd', label: 'Cornflower' },
+  { value: '#a5b4fc', label: 'Periwinkle' },
+  { value: '#c4b5fd', label: 'Lavender' },
+  { value: '#d8b4fe', label: 'Lilac' },
+  { value: '#f0abfc', label: 'Orchid' },
+  { value: '#f9a8d4', label: 'Rose' },
+  { value: '#fda4af', label: 'Blush' },
+  { value: '#fca5a5', label: 'Coral' },
+  { value: '#fdba74', label: 'Apricot' },
+  { value: '#fcd34d', label: 'Amber' },
+  { value: '#fde047', label: 'Sunshine' },
+  { value: '#e2e8f0', label: 'Cloud' },
+  { value: '#d6d3d1', label: 'Stone' },
+]
 
 export type ProfileDraft = {
   name: string
@@ -42,6 +70,69 @@ export function isTrainerProfileComplete(draft: ProfileDraft) {
       draft.timezone &&
       draft.bio.trim() &&
       isAccentColor(draft.accentColor),
+  )
+}
+
+function AccentColorPicker({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (next: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const container = useRef<HTMLDivElement>(null)
+  const selected = ACCENT_COLORS.find((color) => color.value.toLowerCase() === value.toLowerCase())
+
+  useEffect(() => {
+    if (!open) return
+    const close = (event: MouseEvent) => {
+      if (!container.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [open])
+
+  return (
+    <div ref={container} className="relative inline-flex">
+      <button
+        type="button"
+        aria-label={`Theme color${selected ? `: ${selected.label}` : ''}`}
+        aria-expanded={open}
+        className="h-11 w-16 rounded-xl border border-line p-1 hover:border-muted"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span
+          className="block h-full w-full rounded-lg"
+          style={{ backgroundColor: isAccentColor(value) ? value : DEFAULT_ACCENT_COLOR }}
+        />
+      </button>
+      {open ? (
+        <div className="absolute left-0 top-full z-30 mt-2 w-64 rounded-xl border border-line bg-panel p-3 shadow-lg">
+          <div className="grid grid-cols-5 gap-2">
+            {ACCENT_COLORS.map((color) => (
+              <button
+                key={color.value}
+                type="button"
+                title={color.label}
+                aria-label={color.label}
+                aria-pressed={color.value.toLowerCase() === value.toLowerCase()}
+                className={`h-9 w-9 rounded-lg border-2 ${
+                  color.value.toLowerCase() === value.toLowerCase()
+                    ? 'border-white'
+                    : 'border-transparent hover:border-muted'
+                }`}
+                style={{ backgroundColor: color.value }}
+                onClick={() => {
+                  onChange(color.value)
+                  setOpen(false)
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -111,30 +202,15 @@ export function ProfileFields({
         </Field>
       </div>
       <div className="sm:col-span-2">
-        <Field label="Accent color">
-          <div className="flex items-center gap-3">
-            <input
-              type="color"
-              value={isAccentColor(draft.accentColor) ? draft.accentColor : DEFAULT_ACCENT_COLOR}
-              aria-label="Accent color"
-              className="h-11 w-16 cursor-pointer rounded-xl border border-line bg-ink p-1"
-              onChange={(e) => onChange({ ...draft, accentColor: e.target.value })}
-            />
-            <TextInput
-              value={draft.accentColor}
-              aria-label="Accent color hex value"
-              maxLength={7}
-              pattern="#[0-9a-fA-F]{6}"
-              className="max-w-36 font-mono uppercase"
-              onChange={(e) => onChange({ ...draft, accentColor: e.target.value })}
-            />
-            <span
-              className="h-8 flex-1 rounded-lg"
-              style={{ backgroundColor: draft.accentColor }}
-              aria-hidden="true"
-            />
-          </div>
-        </Field>
+        <label className="flex items-center gap-3">
+          <span className="text-xs font-medium uppercase tracking-wide text-muted">
+            Theme color
+          </span>
+          <AccentColorPicker
+            value={draft.accentColor}
+            onChange={(accentColor) => onChange({ ...draft, accentColor })}
+          />
+        </label>
       </div>
     </div>
   )

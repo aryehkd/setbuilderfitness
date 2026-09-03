@@ -16,12 +16,12 @@ export function clearCompletedDefaultSaves(
   return changed ? next : current
 }
 
-function SpinnerIcon() {
+export function SpinnerIcon({ className = '' }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 20 20"
       fill="none"
-      className="h-4 w-4 shrink-0 animate-spin"
+      className={`h-4 w-4 shrink-0 animate-spin ${className}`}
       aria-hidden="true"
     >
       <circle cx="10" cy="10" r="7" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
@@ -35,12 +35,12 @@ function SpinnerIcon() {
   )
 }
 
-function CheckIcon() {
+export function CheckIcon({ className = '' }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 20 20"
       fill="none"
-      className="h-4 w-4 shrink-0 text-lime"
+      className={`h-4 w-4 shrink-0 ${className}`}
       aria-hidden="true"
     >
       <path
@@ -74,7 +74,7 @@ export function SaveDefaultButton({
       onClick={onClick}
     >
       {status === 'saving' ? <SpinnerIcon /> : null}
-      {status === 'saved' ? <CheckIcon /> : null}
+      {status === 'saved' ? <CheckIcon className="text-lime" /> : null}
       {label}
     </Button>
   )
