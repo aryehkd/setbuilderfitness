@@ -1828,7 +1828,7 @@ function ExerciseCard({
           <div className="space-y-1.5">
             <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted">
               Customize Sets
-              <InfoTip label="Customize reps and prescription per set">
+              <InfoTip label="Customize reps and prescription per set" align="right">
                 Customize reps and prescription per set
               </InfoTip>
             </span>

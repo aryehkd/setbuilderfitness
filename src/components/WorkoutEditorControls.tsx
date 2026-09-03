@@ -179,15 +179,22 @@ export function TempoFields({
 export function InfoTip({
   label,
   children,
+  align = 'left',
 }: {
   label: string
   children: ReactNode
+  /** Which corner of the tooltip is pinned to the icon. */
+  align?: 'left' | 'right'
 }) {
-  const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null)
+  const [anchor, setAnchor] = useState<{ left?: number; right?: number; top: number } | null>(null)
 
   const show = (event: { currentTarget: HTMLElement }) => {
     const rect = event.currentTarget.getBoundingClientRect()
-    setAnchor({ left: rect.left, top: rect.bottom + 8 })
+    setAnchor(
+      align === 'right'
+        ? { right: window.innerWidth - rect.right, top: rect.bottom + 8 }
+        : { left: rect.left, top: rect.bottom + 8 },
+    )
   }
 
   return (
@@ -206,7 +213,7 @@ export function InfoTip({
       {anchor ? (
         <span
           role="tooltip"
-          style={{ left: anchor.left, top: anchor.top }}
+          style={{ left: anchor.left, right: anchor.right, top: anchor.top }}
           className="pointer-events-none fixed z-30 w-72 rounded-xl border border-line bg-ink p-3 text-[11px] font-normal normal-case leading-relaxed tracking-normal text-muted shadow-lg"
         >
           {children}
