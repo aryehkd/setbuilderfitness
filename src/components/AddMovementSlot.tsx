@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Button, Card, Field, TextInput } from './ui.tsx'
+import { movementMatchesQuery } from '../../shared/search.ts'
 import { CATEGORIES, EQUIPMENT } from './WorkoutEditorUtils.ts'
 import type { Equipment, ExerciseCategory, Movement } from '../../shared/types.ts'
 
@@ -28,13 +29,7 @@ export function AddMovementSlot({
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const list = q
-      ? movements.filter(
-          (m) =>
-            m.name.toLowerCase().includes(q) ||
-            m.aliases.some((alias) => alias.toLowerCase().includes(q)),
-        )
-      : movements
+    const list = q ? movements.filter((m) => movementMatchesQuery(m, q)) : movements
     return list.slice(0, 12)
   }, [movements, query])
 

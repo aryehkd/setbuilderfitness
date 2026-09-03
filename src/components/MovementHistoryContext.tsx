@@ -2,7 +2,22 @@ import type {
   ExerciseHistoryEntry,
   TrainerClient,
 } from '../../shared/types.ts'
+import { useAuth } from '../lib/auth.tsx'
 import { Field, Select } from './ui.tsx'
+
+export function useSelfClientId() {
+  const { me } = useAuth()
+  return me?.client?.isSelf ? me.client.id : ''
+}
+
+export function historyContextName(
+  clients: TrainerClient[],
+  selectedClientId: string,
+  selfClientId: string,
+) {
+  if (selfClientId && selectedClientId === selfClientId) return 'You'
+  return clients.find((client) => client.id === selectedClientId)?.name
+}
 
 export function ClientHistorySelector({
   clients,
@@ -13,10 +28,12 @@ export function ClientHistorySelector({
   value: string
   onChange: (clientId: string) => void
 }) {
+  const selfClientId = useSelfClientId()
   return (
     <Field label="Client history context">
       <Select value={value} onChange={(event) => onChange(event.target.value)}>
         <option value="">Select a client</option>
+        {selfClientId ? <option value={selfClientId}>Myself</option> : null}
         {clients.map((client) => (
           <option key={client.id} value={client.id}>
             {client.name}
@@ -55,7 +72,7 @@ export function MovementHistoryContext({
   if (entries.length === 0) {
     return (
       <p className="text-xs text-muted">
-        {clientName} has no logged history for {movementName}
+        {clientName} {clientName === 'You' ? 'have' : 'has'} no logged history for {movementName}
       </p>
     )
   }

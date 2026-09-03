@@ -23,6 +23,7 @@ import type {
   VersionHistoryEvent,
 } from '../../shared/types.ts'
 import { setLogIsCompleted, warmupToText } from '../../shared/types.ts'
+import { movementMatchesQuery } from '../../shared/search.ts'
 import {
   assignedEvent,
   diffHistoryExercises,
@@ -785,13 +786,7 @@ export async function handleMovements(ctx: AppContext, req: Request) {
       }
     })
   const mapped = [...personal, ...shared]
-    .filter(
-      (movement) =>
-        !query ||
-        movement.name.toLowerCase().includes(query) ||
-        movement.aliases.some((alias) => alias.toLowerCase().includes(query)) ||
-        movement.muscleGroups.some((muscle) => muscle.toLowerCase().includes(query)),
-    )
+    .filter((movement) => !query || movementMatchesQuery(movement, query))
     .sort((a, b) => a.name.localeCompare(b.name))
     .slice(0, query ? 80 : undefined)
   return json(
@@ -1388,6 +1383,62 @@ export async function handleDeleteTemplate(ctx: AppContext, id: string) {
     WHERE id = ${id} AND trainer_id = ${ctx.trainer!.id}
   `
   return json({ ok: true })
+}
+
+function nextWorkoutCopyName(sourceName: string, existingNames: string[]) {
+  const taken = new Set(existingNames)
+  let n = 1
+  while (taken.has(`${sourceName} copy ${n}`)) n += 1
+  return `${sourceName} copy ${n}`
+}
+
+export async function handleCopyTemplate(ctx: AppContext, id: string) {
+  const denied = requireTrainer(ctx)
+  if (denied) return denied
+  const source = await ctx.db.sql<TemplateRow>`
+    SELECT * FROM workout_templates
+    WHERE id = ${id} AND trainer_id = ${ctx.trainer!.id}
+  `
+  if (!source[0]) return error('Template not found', 404)
+
+  const existing = await ctx.db.sql<{ name: string }>`
+    SELECT name FROM workout_templates
+    WHERE trainer_id = ${ctx.trainer!.id}
+  `
+  const name = nextWorkoutCopyName(
+    source[0].name.trim() || 'Untitled workout',
+    existing.map((row) => row.name),
+  )
+  const [row] = await ctx.db.sql<TemplateRow>`
+    INSERT INTO workout_templates (trainer_id, name, notes, warmup)
+    SELECT ${ctx.trainer!.id}, ${name}, notes, warmup
+    FROM workout_templates
+    WHERE id = ${id} AND trainer_id = ${ctx.trainer!.id}
+    RETURNING *
+  `
+  await ctx.db.sql`
+    INSERT INTO template_exercises (
+      template_id, sort_order, movement_id, variant_id, equipment,
+      set_count, reps_min, reps_max, per_set_enabled, set_prescriptions,
+      method, method_target, category, load_prescription,
+      tempo_eccentric, tempo_pause_bottom, tempo_concentric, tempo_pause_top,
+      tempo_mode, tempo_per_rep,
+      rest_after_set_seconds, rest_after_exercise_seconds,
+      superset_group, superset_order, notes, youtube_url
+    )
+    SELECT
+      ${row!.id}, sort_order, movement_id, variant_id, equipment,
+      set_count, reps_min, reps_max, per_set_enabled, set_prescriptions,
+      method, method_target, category, load_prescription,
+      tempo_eccentric, tempo_pause_bottom, tempo_concentric, tempo_pause_top,
+      tempo_mode, tempo_per_rep,
+      rest_after_set_seconds, rest_after_exercise_seconds,
+      superset_group, superset_order, notes, youtube_url
+    FROM template_exercises
+    WHERE template_id = ${id}
+  `
+  const exercises = await loadExercises(ctx.db, row!.id)
+  return json(mapTemplate(row!, exercises), 201)
 }
 
 type ProgramRow = {

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { movementMatchesQuery } from '../../shared/search.ts'
 import { Card, TextInput } from './ui.tsx'
 import { api } from '../lib/api.ts'
 import type { ExerciseHistoryEntry, LoggedMovement } from '../../shared/types.ts'
@@ -25,13 +26,7 @@ export function MovementHistorySearch({
   const matches = useMemo(() => {
     const search = query.trim().toLowerCase()
     if (!search) return []
-    return movements
-      .filter(
-        (movement) =>
-          movement.name.toLowerCase().includes(search) ||
-          movement.aliases.some((alias) => alias.toLowerCase().includes(search)),
-      )
-      .slice(0, 8)
+    return movements.filter((movement) => movementMatchesQuery(movement, search)).slice(0, 8)
   }, [movements, query])
 
   const chooseMovement = async (movement: LoggedMovement) => {

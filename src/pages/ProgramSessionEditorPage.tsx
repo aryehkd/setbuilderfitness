@@ -4,6 +4,8 @@ import { SessionPrescriptionEditor } from '../components/SessionPrescriptionEdit
 import { VersionHistory } from '../components/VersionHistory.tsx'
 import {
   ClientHistorySelector,
+  historyContextName,
+  useSelfClientId,
 } from '../components/MovementHistoryContext.tsx'
 import { useMovementHistoryContext } from '../hooks/useMovementHistoryContext.ts'
 import { Button, Card } from '../components/ui.tsx'
@@ -44,7 +46,8 @@ export function ProgramSessionEditorPage() {
     void api<TrainerClient[]>('/api/clients').then(setClients)
   }, [])
 
-  const selectedClient = clients.find((client) => client.id === selectedClientId)
+  const selfClientId = useSelfClientId()
+  const selectedClientName = historyContextName(clients, selectedClientId, selfClientId)
   const movementHistory = useMovementHistoryContext(
     selectedClientId,
     draft?.prescription.exercises.map((exercise) => exercise.movementId) ?? [],
@@ -109,7 +112,7 @@ export function ProgramSessionEditorPage() {
         name={draft.name}
         prescription={draft.prescription}
         movements={movements}
-        clientName={selectedClient?.name}
+        clientName={selectedClientName}
         movementHistory={movementHistory.history}
         movementHistoryLoading={movementHistory.loading}
         movementHistoryError={movementHistory.error}

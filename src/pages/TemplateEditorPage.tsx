@@ -1,4 +1,12 @@
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   Button,
@@ -32,7 +40,9 @@ import { AssignWorkoutToDate } from '../components/AssignWorkoutToDate.tsx'
 import { VersionHistory } from '../components/VersionHistory.tsx'
 import {
   ClientHistorySelector,
+  historyContextName,
   MovementHistoryContext,
+  useSelfClientId,
 } from '../components/MovementHistoryContext.tsx'
 import { useMovementHistoryContext } from '../hooks/useMovementHistoryContext.ts'
 import {
@@ -47,6 +57,7 @@ import {
   SaveDefaultButton,
   TempoFields,
   Toggle,
+  InfoTip,
   clearCompletedDefaultSaves,
   type SaveDefaultStatus,
 } from '../components/WorkoutEditorControls.tsx'
@@ -509,8 +520,27 @@ export function TemplateEditorPage() {
   const view: EditorView =
     requestedView === 'compact' && !tableAllowed ? 'edit' : requestedView
 
+  // Table and client view each start wherever they land; only the edit view
+  // returns the trainer to where they left off.
+  const editScrollY = useRef(0)
+  const restoreEditScroll = useRef(false)
+
+  const changeView = (next: EditorView) => {
+    if (next === view) return
+    if (view === 'edit') editScrollY.current = window.scrollY
+    if (next === 'edit') restoreEditScroll.current = true
+    setView(next)
+  }
+
+  useLayoutEffect(() => {
+    if (view !== 'edit' || !restoreEditScroll.current) return
+    restoreEditScroll.current = false
+    window.scrollTo(0, editScrollY.current)
+  }, [view])
+
   const exercises = useMemo(() => template?.exercises ?? [], [template])
-  const selectedClient = clients.find((client) => client.id === selectedClientId)
+  const selfClientId = useSelfClientId()
+  const selectedClientName = historyContextName(clients, selectedClientId, selfClientId)
   const movementHistory = useMovementHistoryContext(
     selectedClientId,
     exercises.map((exercise) => exercise.movementId),
@@ -822,7 +852,11 @@ export function TemplateEditorPage() {
   const changeSupersetOrder = (exerciseId: string, order: number) => {
     const index = visibleExercises.findIndex((item) => item.id === exerciseId)
     if (index < 0) return
-    void saveExerciseArrangement(placeInSupersetOrder(visibleExercises, index, order))
+    const nextExercises = placeInSupersetOrder(visibleExercises, index, order)
+    setTemplate((current) =>
+      current ? { ...current, exercises: nextExercises } : current,
+    )
+    void saveExerciseArrangement(nextExercises)
   }
 
   const renderSlot = (slot: InsertSlot, label: string) => (
@@ -866,7 +900,7 @@ export function TemplateEditorPage() {
   const historyContextFor = (exercise: TemplateExercise) => (
     <MovementHistoryContext
       movementName={exercise.movementName || 'movement'}
-      clientName={selectedClient?.name}
+      clientName={selectedClientName}
       entries={movementHistory.history[exercise.movementId]}
       loading={movementHistory.loading}
       error={movementHistory.error}
@@ -874,7 +908,7 @@ export function TemplateEditorPage() {
   )
 
   const header = (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+    <div className="sticky top-0 z-20 -mx-4 flex flex-col gap-3 border-b border-line bg-ink/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:flex-row sm:items-center sm:px-6">
       {view === 'preview' ? (
         <h1 className="min-w-0 flex-1 font-display text-2xl font-bold">{template.name}</h1>
       ) : (
@@ -892,11 +926,11 @@ export function TemplateEditorPage() {
         <ModeToggle
           value={view}
           options={[
-            { value: 'edit' as const, label: 'Edit' },
+            { value: 'edit' as const, label: 'Build' },
             ...(tableAllowed ? [{ value: 'compact' as const, label: 'Table' }] : []),
             { value: 'preview' as const, label: 'Client view' },
           ]}
-          onChange={setView}
+          onChange={changeView}
         />
         <span className="text-xs text-muted">{saving ? 'Saving…' : 'Saved'}</span>
         <ConfirmButton
@@ -1379,11 +1413,38 @@ export function TemplateEditorPage() {
                 nextGroup={nextGroup}
                 existingGroups={existingGroups}
                 groupSize={block.length}
-                reorderControls={group ? null : reorderButtons}
+                reorderControls={
+                  group ? (
+                    <>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="text-xs"
+                        disabled={offset === 0}
+                        aria-label={`Move ${ex.movementName} up within superset ${group}`}
+                        onClick={() => changeSupersetOrder(ex.id, offset)}
+                      >
+                        Move up
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="text-xs"
+                        disabled={offset === block.length - 1}
+                        aria-label={`Move ${ex.movementName} down within superset ${group}`}
+                        onClick={() => changeSupersetOrder(ex.id, offset + 2)}
+                      >
+                        Move down
+                      </Button>
+                    </>
+                  ) : (
+                    reorderButtons
+                  )
+                }
                 historyContext={
                   <>
                     {historyContextFor(ex)}
-                    {selectedClient ? null : (
+                    {selectedClientName ? null : (
                       <p className="text-xs text-muted">
                         Select a client to view logged history for{' '}
                         {ex.movementName || 'movement'}
@@ -1713,8 +1774,11 @@ function ExerciseCard({
         )}
         {showReps && (
           <div className="space-y-1.5">
-            <span className="block text-xs font-medium uppercase tracking-wide text-muted">
-              Each set
+            <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted">
+              Customize Sets
+              <InfoTip label="Customize reps and prescription per set">
+                Customize reps and prescription per set
+              </InfoTip>
             </span>
             <Toggle value={ex.perSetEnabled} onChange={setPerSetEnabled} />
           </div>
@@ -1941,7 +2005,7 @@ function ExerciseCard({
         )}
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Rest after set (s)">
+        <Field label="Rest between sets">
           <NumericTextInput
             value={ex.restAfterSetSeconds ?? ''}
             onChange={(e) =>
@@ -1958,7 +2022,7 @@ function ExerciseCard({
             }
           />
         </Field>
-        <Field label="Rest after movement (s)">
+        <Field label="Rest after movement">
           <NumericTextInput
             value={ex.restAfterExerciseSeconds ?? ''}
             onChange={(e) =>
@@ -1986,7 +2050,8 @@ function ExerciseCard({
         />
       </Field>
       <Field label="Notes">
-        <TextInput
+        <TextArea
+          autoGrow
           value={ex.notes ?? ''}
           onChange={(e) => onPatch(ex.id, { notes: e.target.value || null })}
           onBlur={(e) => onPatch(ex.id, { notes: e.target.value || null }, true)}

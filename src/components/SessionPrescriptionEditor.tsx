@@ -613,7 +613,7 @@ export function SessionPrescriptionTable({
                   </td>
                   <td className="px-3 py-2">
                     <NumericTextInput
-                      aria-label="Rest after set"
+                      aria-label="Rest between sets"
                       value={exercise.restAfterSetSeconds ?? ''}
                       onChange={(event) =>
                         patchExercise(index, {
@@ -1119,7 +1119,7 @@ function SessionExerciseEditor({
             </Field>
           </>
         ) : null}
-        <Field label="Rest after set (s)">
+        <Field label="Rest between sets">
           <NumericTextInput
             value={ex.restAfterSetSeconds ?? ''}
             onChange={(event) =>
@@ -1129,7 +1129,7 @@ function SessionExerciseEditor({
             }
           />
         </Field>
-        <Field label="Rest after movement (s)">
+        <Field label="Rest after movement">
           <NumericTextInput
             value={ex.restAfterExerciseSeconds ?? ''}
             onChange={(event) =>
@@ -1152,7 +1152,7 @@ function SessionExerciseEditor({
       </Field>
       <Field label="Notes">
         <TextArea
-          rows={2}
+          autoGrow
           value={ex.notes ?? ''}
           onChange={(event) => onPatch({ notes: event.target.value || null })}
         />

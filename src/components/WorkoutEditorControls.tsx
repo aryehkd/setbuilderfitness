@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Field, NumericTextInput, Button } from './ui.tsx'
 import type { Tempo } from '../../shared/types.ts'
 
@@ -176,7 +176,13 @@ export function TempoFields({
   )
 }
 
-export function BlockDragHelp() {
+export function InfoTip({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
   const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null)
 
   const show = (event: { currentTarget: HTMLElement }) => {
@@ -188,7 +194,7 @@ export function BlockDragHelp() {
     <span className="inline-flex">
       <button
         type="button"
-        aria-label="How dragging blocks works"
+        aria-label={label}
         className="flex h-4 w-4 items-center justify-center rounded-full border border-line text-[10px] leading-none text-muted hover:border-muted hover:text-white"
         onMouseEnter={show}
         onMouseLeave={() => setAnchor(null)}
@@ -203,23 +209,31 @@ export function BlockDragHelp() {
           style={{ left: anchor.left, top: anchor.top }}
           className="pointer-events-none fixed z-30 w-72 rounded-xl border border-line bg-ink p-3 text-[11px] font-normal normal-case leading-relaxed tracking-normal text-muted shadow-lg"
         >
-          Drag a movement by its handle, then drop it on:
-          <span className="mt-2 block">
-            <span className="block">
-              <strong className="text-white">A line</strong> to move it there. Dragging a
-              superset&rsquo;s first movement moves the whole group.
-            </span>
-            <span className="mt-1 block">
-              <strong className="text-white">Another movement</strong> to superset them; the
-              highlighted letter previews the result.
-            </span>
-            <span className="mt-1 block">
-              Leaving a superset drops the movement out of it, and a group left with one
-              movement becomes a single again.
-            </span>
-          </span>
+          {children}
         </span>
       ) : null}
     </span>
+  )
+}
+
+export function BlockDragHelp() {
+  return (
+    <InfoTip label="How dragging blocks works">
+      Drag a movement by its handle, then drop it on:
+      <span className="mt-2 block">
+        <span className="block">
+          <strong className="text-white">A line</strong> to move it there. Dragging a
+          superset&rsquo;s first movement moves the whole group.
+        </span>
+        <span className="mt-1 block">
+          <strong className="text-white">Another movement</strong> to superset them; the
+          highlighted letter previews the result.
+        </span>
+        <span className="mt-1 block">
+          Leaving a superset drops the movement out of it, and a group left with one
+          movement becomes a single again.
+        </span>
+      </span>
+    </InfoTip>
   )
 }

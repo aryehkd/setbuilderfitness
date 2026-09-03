@@ -1,5 +1,7 @@
 import {
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ButtonHTMLAttributes,
@@ -255,11 +257,39 @@ export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
   )
 }
 
-export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function TextArea({
+  autoGrow = false,
+  className = '',
+  onInput,
+  rows,
+  value,
+  ...props
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { autoGrow?: boolean }) {
+  const ref = useRef<HTMLTextAreaElement>(null)
+  const fit = useCallback(() => {
+    const el = ref.current
+    if (!el || !autoGrow) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [autoGrow])
+
+  useLayoutEffect(() => {
+    fit()
+  }, [fit, value])
+
   return (
     <textarea
       {...props}
-      className={`w-full min-w-0 rounded-xl border border-line bg-ink px-3 py-2.5 text-base outline-none focus:border-lime sm:text-sm ${props.className ?? ''}`}
+      ref={ref}
+      value={value}
+      rows={rows ?? (autoGrow ? 1 : undefined)}
+      onInput={(event) => {
+        fit()
+        onInput?.(event)
+      }}
+      className={`w-full min-w-0 rounded-xl border border-line bg-ink px-3 py-2.5 text-base outline-none focus:border-lime sm:text-sm ${
+        autoGrow ? 'min-h-11 resize-y overflow-hidden' : ''
+      } ${className}`}
     />
   )
 }

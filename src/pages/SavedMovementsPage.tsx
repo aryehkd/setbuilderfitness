@@ -6,6 +6,7 @@ import type {
   MovementPrescriptionDefaults,
   PrescribedExercise,
 } from '../../shared/types.ts'
+import { movementMatchesQuery } from '../../shared/search.ts'
 import { AddMovementSlot } from '../components/AddMovementSlot.tsx'
 import { MovementDefaultsEditorCard } from '../components/SessionPrescriptionEditor.tsx'
 import { ModeToggle, type SaveDefaultStatus } from '../components/WorkoutEditorControls.tsx'
@@ -51,10 +52,7 @@ export function SavedMovementsPage() {
         if (sourceFilter === 'shared' && movement.source !== 'shared') return false
         if (sourceFilter === 'custom' && movement.source !== 'trainer') return false
         if (!search) return true
-        return (
-          movement.name.toLowerCase().includes(search) ||
-          movement.aliases.some((alias) => alias.toLowerCase().includes(search))
-        )
+        return movementMatchesQuery(movement, search)
       })
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [movements, query, sourceFilter])

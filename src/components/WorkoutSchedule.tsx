@@ -3,7 +3,15 @@ import { Link } from 'react-router-dom'
 import type { AdHocLog, AdHocType, Session } from '../../shared/types.ts'
 import { api } from '../lib/api.ts'
 import { localDateKey, type MonthCursor } from '../lib/workoutSchedule.ts'
+import { SearchSelect, type SearchSelectOption } from './SearchSelect.tsx'
 import { Button, Card, DateInput, Field, TextInput } from './ui.tsx'
+
+const dayAddButtonClass =
+  'flex h-7 w-full items-center justify-center rounded-md border border-transparent text-muted hover:border-lime hover:bg-ink hover:text-white'
+
+function dayCellBorder(date: string | null, todayKey: string) {
+  return date === todayKey ? 'border-lime' : 'border-line/70'
+}
 
 function monthMatrix(year: number, month: number) {
   const start = new Date(year, month, 1).getDay()
@@ -116,6 +124,100 @@ function ExtraActivityEditor({
   )
 }
 
+export type ScheduleAssignOptions = {
+  people: SearchSelectOption[]
+  workouts: SearchSelectOption[]
+  defaultPersonId?: string
+  onAssigned: () => void | Promise<void>
+}
+
+function AssignToDayForm({
+  date,
+  people,
+  workouts,
+  defaultPersonId,
+  onAssigned,
+  onCancel,
+}: {
+  date: string
+  people: SearchSelectOption[]
+  workouts: SearchSelectOption[]
+  defaultPersonId?: string
+  onAssigned: () => void | Promise<void>
+  onCancel: () => void
+}) {
+  const [personId, setPersonId] = useState(defaultPersonId ?? '')
+  const [templateId, setTemplateId] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const dateLabel = new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  })
+
+  const assign = async () => {
+    if (!personId || !templateId) return
+    setSaving(true)
+    setError(null)
+    try {
+      await api('/api/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ clientId: personId, templateId, date }),
+      })
+      await onAssigned()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not assign workout')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card className="space-y-4">
+      <h3 className="font-semibold">Add workout · {dateLabel}</h3>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <SearchSelect
+          label="Person"
+          placeholder="Search yourself or a client…"
+          options={people}
+          valueId={personId}
+          onChange={setPersonId}
+        />
+        <SearchSelect
+          label="Workout"
+          placeholder="Search workouts…"
+          options={workouts}
+          valueId={templateId}
+          onChange={setTemplateId}
+        />
+      </div>
+      {error ? <p className="text-sm text-red-300">{error}</p> : null}
+      <div className="flex flex-wrap gap-2">
+        <Button disabled={saving || !personId || !templateId} onClick={() => void assign()}>
+          {saving ? 'Adding…' : 'Add workout'}
+        </Button>
+        <Button variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+function DayAddButton({ date, onClick }: { date: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={`Add workout on ${date}`}
+      className={dayAddButtonClass}
+      onClick={onClick}
+    >
+      +
+    </button>
+  )
+}
+
 export function WorkoutSchedule({
   sessions,
   activities = [],
@@ -123,6 +225,7 @@ export function WorkoutSchedule({
   onCursorChange,
   onActivityUpdated,
   showAssignee = false,
+  assign,
 }: {
   sessions: Session[]
   activities?: AdHocLog[]
@@ -130,6 +233,7 @@ export function WorkoutSchedule({
   onCursorChange: (cursor: MonthCursor) => void
   onActivityUpdated?: () => void | Promise<void>
   showAssignee?: boolean
+  assign?: ScheduleAssignOptions
 }) {
   const [view, setView] = useState<'week' | 'month' | 'list'>(() =>
     typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches
@@ -138,6 +242,8 @@ export function WorkoutSchedule({
   )
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [editingActivity, setEditingActivity] = useState<AdHocLog | null>(null)
+  const [addingFor, setAddingFor] = useState<string | null>(null)
+  const todayKey = localDateKey(new Date())
   const sortedSessions = useMemo(
     () =>
       [...sessions].sort(
@@ -211,6 +317,29 @@ export function WorkoutSchedule({
     onCursorChange(moveMonth(cursor, amount))
   }
 
+  const openAdd = (date: string) => {
+    setAddingFor(date)
+    setEditingActivity(null)
+  }
+
+  const assignForm =
+    assign && addingFor ? (
+      <div className="mt-4">
+        <AssignToDayForm
+          key={addingFor}
+          date={addingFor}
+          people={assign.people}
+          workouts={assign.workouts}
+          defaultPersonId={assign.defaultPersonId}
+          onAssigned={async () => {
+            await assign.onAssigned()
+            setAddingFor(null)
+          }}
+          onCancel={() => setAddingFor(null)}
+        />
+      </div>
+    ) : null
+
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -267,7 +396,7 @@ export function WorkoutSchedule({
               return (
                 <div
                   key={dateKey}
-                  className="min-h-36 min-w-0 rounded-xl border border-line/70 p-2 sm:min-h-48"
+                  className={`flex min-h-36 min-w-0 flex-col rounded-xl border p-2 sm:min-h-48 ${dayCellBorder(dateKey, todayKey)}`}
                 >
                   <div className="mb-2 text-center">
                     <div className="text-xs font-medium text-muted">
@@ -280,7 +409,7 @@ export function WorkoutSchedule({
                       })}
                     </div>
                   </div>
-                  <div className="space-y-2">
+                  <div className="min-h-0 flex-1 space-y-2">
                     {daySessions.map((session) => (
                       <Link
                         key={session.id}
@@ -318,6 +447,9 @@ export function WorkoutSchedule({
                       </button>
                     ))}
                   </div>
+                  {assign ? (
+                    <DayAddButton date={dateKey} onClick={() => openAdd(dateKey)} />
+                  ) : null}
                 </div>
               )
             })}
@@ -342,37 +474,42 @@ export function WorkoutSchedule({
               return (
                 <div
                   key={index}
-                  className="min-h-14 min-w-0 rounded-lg border border-line/70 p-1 text-left sm:min-h-20"
+                  className={`flex min-h-14 min-w-0 flex-col rounded-lg border p-1 text-left sm:min-h-20 ${dayCellBorder(date, todayKey)}`}
                 >
                   <div className="text-xs text-muted">{day ?? ''}</div>
-                  {daySessions.map((session) => (
-                    <Link
-                      key={session.id}
-                      to={`/sessions/${session.id}`}
-                      title={
-                        showAssignee
-                          ? `${session.name} · ${assigneeLabel(session) ?? 'Unknown'}`
-                          : session.name
-                      }
-                      className="mt-1 block truncate rounded bg-lime/15 px-1 py-0.5 text-[11px] text-lime"
-                    >
-                      {session.name}
-                      {showAssignee && assigneeLabel(session)
-                        ? ` · ${assigneeLabel(session)}`
-                        : ''}
-                    </Link>
-                  ))}
-                  {dayActivities.map((activity) => (
-                    <button
-                      key={activity.id}
-                      type="button"
-                      title={`${activityLabel(activity)}${activity.notes ? ` · ${activity.notes}` : ''}`}
-                      className="mt-1 block w-full truncate rounded border border-lime/40 px-1 py-0.5 text-left text-[11px] text-lime hover:bg-lime/10"
-                      onClick={() => setEditingActivity(activity)}
-                    >
-                      {activityLabel(activity)}
-                    </button>
-                  ))}
+                  <div className="min-h-0 flex-1">
+                    {daySessions.map((session) => (
+                      <Link
+                        key={session.id}
+                        to={`/sessions/${session.id}`}
+                        title={
+                          showAssignee
+                            ? `${session.name} · ${assigneeLabel(session) ?? 'Unknown'}`
+                            : session.name
+                        }
+                        className="mt-1 block truncate rounded bg-lime/15 px-1 py-0.5 text-[11px] text-lime"
+                      >
+                        {session.name}
+                        {showAssignee && assigneeLabel(session)
+                          ? ` · ${assigneeLabel(session)}`
+                          : ''}
+                      </Link>
+                    ))}
+                    {dayActivities.map((activity) => (
+                      <button
+                        key={activity.id}
+                        type="button"
+                        title={`${activityLabel(activity)}${activity.notes ? ` · ${activity.notes}` : ''}`}
+                        className="mt-1 block w-full truncate rounded border border-lime/40 px-1 py-0.5 text-left text-[11px] text-lime hover:bg-lime/10"
+                        onClick={() => setEditingActivity(activity)}
+                      >
+                        {activityLabel(activity)}
+                      </button>
+                    ))}
+                  </div>
+                  {assign && date ? (
+                    <DayAddButton date={date} onClick={() => openAdd(date)} />
+                  ) : null}
                 </div>
               )
             })}
@@ -420,6 +557,7 @@ export function WorkoutSchedule({
             </ul>
           </>
         )}
+        {assignForm}
       </Card>
       {editingActivity ? (
         <ExtraActivityEditor

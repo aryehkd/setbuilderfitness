@@ -370,8 +370,9 @@ export function resettleSuperset<T extends SupersetMember>(exercises: T[], group
 }
 
 /**
- * Moves one superset member to `nextOrder` (1-based) and renumbers the rest.
- * Members stay in the same list slots so the group remains contiguous.
+ * Moves one superset member to `nextOrder` (1-based) and shifts the rest.
+ * Changing C from 3 to 1 yields C=1, A=2, B=3. The group is kept together
+ * in the list in that new order.
  */
 export function placeInSupersetOrder<T extends SupersetMember>(
   exercises: T[],
@@ -382,29 +383,38 @@ export function placeInSupersetOrder<T extends SupersetMember>(
   const group = current?.supersetGroup?.trim()
   if (!current || !group) return exercises
 
-  const memberIndexes = exercises
-    .map((_, memberIndex) => memberIndex)
-    .filter((memberIndex) => exercises[memberIndex]!.supersetGroup?.trim() === group)
-  memberIndexes.sort(
-    (a, b) =>
-      (exercises[a]!.supersetOrder ?? 0) - (exercises[b]!.supersetOrder ?? 0) || a - b,
-  )
-  if (current.supersetOrder === nextOrder && memberIndexes[nextOrder - 1] === index) {
-    return exercises
-  }
+  const members = exercises
+    .map((exercise, memberIndex) => ({ exercise, memberIndex }))
+    .filter(({ exercise }) => exercise.supersetGroup?.trim() === group)
+    .sort(
+      (a, b) =>
+        (a.exercise.supersetOrder ?? 0) - (b.exercise.supersetOrder ?? 0) ||
+        a.memberIndex - b.memberIndex,
+    )
 
-  const without = memberIndexes.filter((memberIndex) => memberIndex !== index)
-  const clamped = Math.min(Math.max(1, nextOrder), without.length + 1)
-  const ordered = [...without]
-  ordered.splice(clamped - 1, 0, index)
-  const slots = [...memberIndexes].sort((a, b) => a - b)
-  const next = [...exercises]
-  ordered.forEach((fromIndex, position) => {
-    next[slots[position]!] = {
-      ...exercises[fromIndex]!,
-      supersetOrder: position + 1,
+  const from = members.findIndex((member) => member.memberIndex === index)
+  if (from < 0) return exercises
+  const to = Math.min(Math.max(nextOrder, 1), members.length) - 1
+  if (from === to) return exercises
+
+  const reordered = members.map((member) => member.exercise)
+  const [moved] = reordered.splice(from, 1)
+  reordered.splice(to, 0, moved!)
+
+  const memberIndexSet = new Set(members.map((member) => member.memberIndex))
+  const next: T[] = []
+  let inserted = false
+  for (let i = 0; i < exercises.length; i++) {
+    if (!memberIndexSet.has(i)) {
+      next.push(exercises[i]!)
+      continue
     }
-  })
+    if (inserted) continue
+    inserted = true
+    reordered.forEach((exercise, position) => {
+      next.push({ ...exercise, supersetGroup: group, supersetOrder: position + 1 })
+    })
+  }
   return next
 }
 

@@ -51,10 +51,15 @@ export function TrainerHomePage() {
     void api<Program[]>('/api/programs').then(setPrograms)
   }, [])
 
-  useEffect(() => {
+  const reloadSessions = async () => {
     const query = new URLSearchParams({ from, to })
     if (selectedClientId) query.set('clientId', selectedClientId)
-    void api<Session[]>(`/api/sessions?${query.toString()}`).then(setSessions)
+    setSessions(await api<Session[]>(`/api/sessions?${query.toString()}`))
+  }
+
+  useEffect(() => {
+    void reloadSessions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to, selectedClientId])
 
   const reloadActivities = async () => {
@@ -84,6 +89,23 @@ export function TrainerHomePage() {
   const recentPrograms = useMemo(
     () => [...programs].sort((a, b) => recencyMs(b.updatedAt) - recencyMs(a.updatedAt)).slice(0, HOME_PREVIEW_LIMIT),
     [programs],
+  )
+  const assignPeople = useMemo(() => {
+    const people = me?.client?.isSelf
+      ? [{ id: me.client.id, label: 'Myself' }]
+      : []
+    return [
+      ...people,
+      ...clients.map((client) => ({
+        id: client.id,
+        label: client.name || client.email,
+        detail: client.name ? client.email : undefined,
+      })),
+    ]
+  }, [clients, me])
+  const assignWorkouts = useMemo(
+    () => templates.map((template) => ({ id: template.id, label: template.name })),
+    [templates],
   )
 
   return (
@@ -126,7 +148,7 @@ export function TrainerHomePage() {
         </Card>
         <Card>
           <div className="mb-3 flex items-center justify-between gap-3">
-            <h2 className="font-semibold">Workout templates</h2>
+            <h2 className="font-semibold">Workouts</h2>
             <SeeAllLink to="/workouts" />
           </div>
           {templates.length === 0 && (
@@ -191,6 +213,12 @@ export function TrainerHomePage() {
         onCursorChange={setCursor}
         onActivityUpdated={reloadActivities}
         showAssignee
+        assign={{
+          people: assignPeople,
+          workouts: assignWorkouts,
+          defaultPersonId: selectedClientId || undefined,
+          onAssigned: reloadSessions,
+        }}
       />
       <ExtraActivityForm onLogged={reloadActivities} />
     </div>

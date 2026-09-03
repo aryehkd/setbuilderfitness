@@ -8,6 +8,7 @@ import {
   handleAssignSession,
   handleCreateMovement,
   handleCreateProgram,
+  handleCopyTemplate,
   handleCreateTemplate,
   handleDeleteExercise,
   handleDeleteMovementDefaults,
@@ -127,6 +128,11 @@ export default async (req: Request) => {
       if (req.method === 'DELETE' && exerciseId) {
         return await handleDeleteExercise(ctx, templateId, exerciseId)
       }
+    }
+
+    const templateCopy = path.match(/^\/api\/templates\/([^/]+)\/copy$/)
+    if (templateCopy && req.method === 'POST') {
+      return await handleCopyTemplate(ctx, templateCopy[1]!)
     }
 
     const templateMatch = path.match(/^\/api\/templates\/([^/]+)$/)
