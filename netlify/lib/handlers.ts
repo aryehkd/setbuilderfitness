@@ -638,10 +638,42 @@ export async function handleOnboarding(ctx: AppContext, req: Request) {
   return handleGetMe(loaded.ctx)
 }
 
+/**
+ * Wipe this user's app data so they can pick trainer vs client again.
+ * The Identity login is kept; the next /api/me recreates an empty user row.
+ *
+ * Trainers also unassign other clients and delete workouts assigned from this
+ * account, because those rows still reference the trainer id.
+ */
+async function wipeCurrentUser(ctx: AppContext) {
+  if (ctx.trainer) {
+    const trainerId = ctx.trainer.id
+    await ctx.db.sql`DELETE FROM sessions WHERE trainer_id = ${trainerId}`
+    await ctx.db.sql`
+      UPDATE clients
+      SET trainer_id = NULL
+      WHERE trainer_id = ${trainerId} AND user_id <> ${ctx.user.id}
+    `
+    await ctx.db.sql`DELETE FROM workout_templates WHERE trainer_id = ${trainerId}`
+    await ctx.db.sql`DELETE FROM programs WHERE trainer_id = ${trainerId}`
+    await ctx.db.sql`DELETE FROM movements WHERE trainer_id = ${trainerId}`
+  }
+  await ctx.db.sql`DELETE FROM users WHERE id = ${ctx.user.id}`
+}
+
+export async function handleResetAccount(ctx: AppContext, req: Request) {
+  const body = (await req.json().catch(() => ({}))) as { confirm?: unknown }
+  if (body.confirm !== true) {
+    return error('Confirmation is required')
+  }
+  await wipeCurrentUser(ctx)
+  return json({ ok: true })
+}
+
 /** Local-only: wipe the current dev persona so onboarding can be replayed. */
 export async function handleDevReset(ctx: AppContext) {
   if (!devAuthEnabled()) return error('Not found', 404)
-  await ctx.db.sql`DELETE FROM users WHERE id = ${ctx.user.id}`
+  await wipeCurrentUser(ctx)
   return json({ ok: true })
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Heatmap } from '../components/Heatmap.tsx'
 import { MovementHistorySearch } from '../components/MovementHistorySearch.tsx'
-import { Button, Card } from '../components/ui.tsx'
+import { Button, Card, ConfirmButton } from '../components/ui.tsx'
 import { ProfileFields, type ProfileDraft } from '../components/ProfileFields.tsx'
 import { api } from '../lib/api.ts'
 import { useAuth } from '../lib/auth.tsx'
@@ -31,7 +31,9 @@ export function ProfilePage() {
   const [draft, setDraft] = useState<ProfileDraft | null>(null)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [resetting, setResetting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [resetError, setResetError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!me) return
@@ -146,6 +148,40 @@ export function ProfilePage() {
           )}
         </>
       ) : null}
+      <Card className="space-y-3">
+        <h2 className="font-semibold text-red-200">Reset account</h2>
+        <p className="text-sm text-muted">
+          Permanently delete this account&apos;s workouts, programs, movement library, logs, and
+          trainer or client role. You stay signed in and can choose trainer or client again.
+          {me?.user.role === 'trainer'
+            ? ' Clients assigned to you will be unassigned, and workouts you assigned to them will be deleted.'
+            : ''}
+        </p>
+        {resetError && <p className="text-sm text-red-300">{resetError}</p>}
+        <ConfirmButton
+          disabled={resetting}
+          question="Delete all of your account data? This cannot be undone."
+          confirmLabel={resetting ? 'Deleting…' : 'Yes, delete everything'}
+          onConfirm={() => {
+            void (async () => {
+              setResetting(true)
+              setResetError(null)
+              try {
+                await api('/api/account/reset', {
+                  method: 'POST',
+                  body: JSON.stringify({ confirm: true }),
+                })
+                window.location.assign('/onboarding')
+              } catch (err) {
+                setResetError(err instanceof Error ? err.message : 'Could not reset account')
+                setResetting(false)
+              }
+            })()
+          }}
+        >
+          Delete all account data
+        </ConfirmButton>
+      </Card>
       <Button variant="ghost" className="w-full sm:w-auto" onClick={() => void logout()}>
         Log out
       </Button>

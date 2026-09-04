@@ -33,6 +33,7 @@ import {
   handleMaterializeSharedMovement,
   handleMovements,
   handleOnboarding,
+  handleResetAccount,
   handlePastWorkouts,
   handleReorderExercises,
   handleSaveMovementDefaults,
@@ -102,6 +103,9 @@ export default async (req: Request) => {
 
     if (path === '/api/me' && req.method === 'GET') return await handleGetMe(ctx)
     if (path === '/api/me' && req.method === 'PUT') return await handleUpdateProfile(ctx, req)
+    if (path === '/api/account/reset' && req.method === 'POST') {
+      return await handleResetAccount(ctx, req)
+    }
     if (path === '/api/trainer' && req.method === 'GET') {
       return await handleGetAssignedTrainer(ctx)
     }
